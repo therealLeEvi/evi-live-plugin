@@ -37,10 +37,13 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import javax.swing.SwingUtilities;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions. */
-@PluginDescriptor(name="EVI Live (Local)",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"},enabledByDefault=false)
+@PluginDescriptor(name="EVI Live (Local)",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
 public class EviLivePlugin extends Plugin {
+  private static final Logger log=LoggerFactory.getLogger(EviLivePlugin.class);
   @Inject private Client client;
   @Inject private ConfigManager configManager;
   @Inject private ClientToolbar toolbar;
@@ -296,7 +299,7 @@ public class EviLivePlugin extends Plugin {
     synchronized(queue) {
       if(queue.size()>=512) {
         queue.clear();reset(); // Conservative rebaseline after data loss; do not fabricate complete trades.
-        System.err.println("EVI Live: local delivery queue overflow; observation restarted. Review missing trades manually.");
+        log.warn("EVI Live: local delivery queue overflow; observation restarted. Review missing trades manually.");
         status("Delivery queue filled while disconnected. Observation restarted; review missing trades manually.");
         return;
       }
@@ -350,7 +353,7 @@ public class EviLivePlugin extends Plugin {
       // completely -- see RiskLevel.java and the 2026-09-15 README entry.) Logging the full trace
       // and showing a short message keeps any future unanticipated failure visible and recoverable
       // instead of silently killing suggestions forever.
-      ex.printStackTrace();
+      log.warn("EVI Live: suggestion check failed",ex);
       updatePanelSuggestion(null,"Suggestion check failed ("+ex.getClass().getSimpleName()+"). See client.log for details.");
     }
   }
