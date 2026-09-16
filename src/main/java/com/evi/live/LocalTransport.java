@@ -1,0 +1,52 @@
+package com.evi.live;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.Proxy;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+
+interface LocalTransport {
+  int send(String key, String json) throws IOException;
+  /**
+   * Returns the response body, or null on any non-200 status. Never throws on a plain rejection.
+   * query is a URL query string without a leading '?' (e.g. "minProfit=500000&risk=high"), or ""
+   * for none -- built entirely from this plugin's own local config, never from observed content.
+   */
+  String get(String key, String query) throws IOException;
+
+  /** Fixed destinations, no listener, redirects, system proxy or game commands. */
+  final class Http implements LocalTransport {
+    public int send(String key, String json) throws IOException {
+      HttpURLConnection connection = (HttpURLConnection)new URL("http://127.0.0.1:51743/api/events").openConnection(Proxy.NO_PROXY);
+      try {
+        connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(1500);
+        connection.setReadTimeout(2000);
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Authorization", "Bearer " + key);
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        connection.setFixedLengthStreamingMode(bytes.length);
+        try(OutputStream stream = connection.getOutputStream()) { stream.write(bytes); }
+        return connection.getResponseCode();
+      } finally { connection.disconnect(); }
+    }
+    public String get(String key, String query) throws IOException {
+      String url = "http://127.0.0.1:51743/api/suggestion" + (query == null || query.isEmpty() ? "" : "?" + query);
+      HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);
+      try {
+        connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(1500);
+        connection.setReadTimeout(2000);
+        connection.setRequestMethod("GET");
+        connection.setRequestProperty("Authorization", "Bearer " + key);
+        if (connection.getResponseCode() != 200) return null;
+        try(InputStream in = connection.getInputStream()) { return new String(in.readAllBytes(), StandardCharsets.UTF_8); }
+      } finally { connection.disconnect(); }
+    }
+  }
+}

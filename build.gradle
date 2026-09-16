@@ -1,0 +1,63 @@
+plugins { id 'java' }
+repositories {
+    maven { url = 'https://repo.runelite.net'; content { includeGroupByRegex('net\\.runelite.*') } }
+    mavenCentral()
+}
+def runeLiteVersion = '1.12.38'
+dependencies {
+    compileOnly "net.runelite:client:${runeLiteVersion}"
+    testImplementation "net.runelite:client:${runeLiteVersion}"
+    testImplementation "net.runelite:jshell:${runeLiteVersion}"
+}
+group = 'com.evi'
+version = '3.5.0'
+tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
+tasks.register('run', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveLauncher'
+    jvmArgs '-ea'
+    args '--developer-mode'
+}
+tasks.register('observationTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveObservationTest'
+}
+
+tasks.register('pairingTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.PairingKeyTest'
+}
+tasks.register('panelTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLivePanelTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.register('economyTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EconomyScopeTest'
+}
+tasks.register('deliveryTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveDeliveryTest'
+}
+tasks.register('suggestionTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveSuggestionTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.register('hintTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveHintTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.register('searchHighlightTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveSearchHighlightTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.register('itemSelectTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveItemSelectWidgetTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.named('check') { dependsOn 'observationTest', 'pairingTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest' }
