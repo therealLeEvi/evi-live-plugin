@@ -60,7 +60,7 @@ public class EviLivePlugin extends Plugin {
   private volatile boolean running;
   private volatile long lifecycle;
   private long pairingRevision;
-  private final Gson gson=new Gson();
+  @Inject private Gson gson;
   private final ArrayDeque<String> queue=new ArrayDeque<>();
   private LocalTransport transport=new LocalTransport.Http();
   private ScheduledExecutorService sender;

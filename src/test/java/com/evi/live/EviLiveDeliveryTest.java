@@ -1,5 +1,6 @@
 package com.evi.live;
 
+import com.google.gson.Gson;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -26,6 +27,11 @@ public final class EviLiveDeliveryTest {
   @SuppressWarnings("unchecked")
   public static void main(String[] args)throws Exception {
     EviLivePlugin plugin=new EviLivePlugin();Fake fake=new Fake();
+    // gson is @Inject-only on the real plugin (Guice supplies the client's shared instance; the
+    // Hub's packager rejects a plugin that constructs its own) -- this harness builds the plugin
+    // with `new`, not Guice, so it has to seed the field itself, same as every other @Inject field
+    // this file sets via reflection below.
+    set(plugin,"gson",new Gson());
     set(plugin,"transport",fake);set(plugin,"running",true);set(plugin,"lifecycle",1L);
     set(plugin,"pluginKey","abcdef0123456789".repeat(4));
     ArrayDeque<String> queue=(ArrayDeque<String>)get(plugin,"queue");
