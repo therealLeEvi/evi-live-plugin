@@ -143,7 +143,7 @@ final class EviLivePanel extends PluginPanel {
     SwingUtilities.invokeLater(() -> suggestion.setText(message == null || message.isEmpty() ? "No suggestion yet." : message));
   }
 
-  /** Orange suggestion text for a sell that would lose money right now; brand teal otherwise. */
+  /** Orange suggestion text for a sell that would lose GP right now; brand teal otherwise. */
   void suggestionWarning(boolean loss) {
     SwingUtilities.invokeLater(() -> suggestion.setForeground(loss ? ColorScheme.PROGRESS_INPROGRESS_COLOR : EviTheme.BRAND));
   }

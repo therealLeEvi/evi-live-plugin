@@ -382,7 +382,7 @@ public final class EviLiveDeliveryTest {
       "A held item's own buy offerId must be appended as holdBuyId, URL-encoded, after the existing hold fields");
 
     // Held.price / holdBuyPrice: the REAL average price actually paid (spent/filled), not the
-    // offer's set/max price -- this is the fix for the real-world failure report of EVI suggesting
+    // offer's set/max price -- this is the fix for the in-game failure report of EVI suggesting
     // a buy, then coming back with a plain "sell near X gp" reminder with no idea whether X was
     // above or below what was actually paid. Reusing holdPlugin/collected/buying deliberately: a
     // held entry recorded with NO spent data (every case above this point) must keep sending no
@@ -688,7 +688,7 @@ public final class EviLiveDeliveryTest {
     check(pollPlugin2Skips.isEmpty(),"A verified-real persisted suggestion must not be skipped");
 
     // pollSuggestion() end-to-end: the bridge's remembered quantity (13, matching the journal) is
-    // higher than what's actually in the inventory right now (11) -- the exact real-world shape of
+    // higher than what's actually in the inventory right now (11) -- the exact in-game shape of
     // the bug report this fix came from (a partially-filled buy order, cancelled, left a stale
     // remaining count). Must come through corrected, not as the bridge originally sent it.
     EviLivePlugin pollPlugin3=new EviLivePlugin();

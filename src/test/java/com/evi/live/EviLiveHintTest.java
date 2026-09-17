@@ -111,7 +111,7 @@ public class EviLiveHintTest {
     String shownSell = fc.chatboxContainer.createdChildren.get(0).text;
     check(shownSell.contains("65") && shownSell.toLowerCase().contains("sell"), "Sell-side hint text must name the suggested sell price: " + shownSell);
     check(!shownSell.contains("LOSS"), "A buy-labelled suggestion with no loss data must not warn: " + shownSell);
-    // A holding sell that would lose money: the hint still offers the price (never blocked) but says so.
+    // A holding sell that would lose GP: the hint still offers the price (never blocked) but says so.
     Suggestion losing = EviLiveSuggestionTest.suggestion(1, "sell", 100, 50, 65);
     losing.lossIfSoldNow = 1100L; losing.breakEvenPrice = 1234;
     cache.set(losing);

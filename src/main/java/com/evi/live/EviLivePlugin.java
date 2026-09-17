@@ -792,7 +792,7 @@ public class EviLivePlugin extends Plugin {
   private void updatePanelSuggestion(Suggestion s, String diag) {
     if(panel==null)return;
     if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);return;}
-    // A sell that would lose money right now is still shown -- it's the player's call -- but flagged
+    // A sell that would lose GP right now is still shown -- it's the player's call -- but flagged
     // up front with its break-even price and the card turns orange, so it can't read like a normal flip.
     String warning=s.sellsAtLoss()
       ?String.format("LOSS if sold now: about %,d gp.%s ",s.lossIfSoldNow,s.breakEvenPrice==null?"":String.format(" Break-even: %,d gp.",s.breakEvenPrice))
