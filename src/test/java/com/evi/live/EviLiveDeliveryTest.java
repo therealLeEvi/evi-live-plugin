@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Synthetic transport only. Does not connect to the user's bridge. */
 public final class EviLiveDeliveryTest {
@@ -118,6 +119,42 @@ public final class EviLiveDeliveryTest {
     });
     check("".equals(suggestionQuery.invoke(marketOff)),"Explicit includeMarketSuggestions=false must be left off the query, matching the default");
 
+    // includeInventory/inventory: opt-in (EviLiveConfig.suggestIdleInventory()) plus the client-thread
+    // inventoryQuantities snapshot (see refreshInventoryItemIds/its own field doc) -- both must be
+    // true/non-empty before anything is sent, and item IDs must appear sorted for a deterministic
+    // query string, matching the existing `exclude=` convention.
+    Map<Integer,Integer> snapshot=new java.util.HashMap<>();
+    snapshot.put(30810,11);snapshot.put(995,50000000);snapshot.put(4151,1);
+    EviLivePlugin inventoryOff=new EviLivePlugin();
+    set(inventoryOff,"config",new EviLiveConfig(){});
+    set(inventoryOff,"inventoryQuantities",snapshot);
+    check("".equals(suggestionQuery.invoke(inventoryOff)),"suggestIdleInventory defaults to off, so a populated inventory snapshot must still be left off the query");
+
+    EviLivePlugin inventoryOnEmpty=new EviLivePlugin();
+    set(inventoryOnEmpty,"config",new EviLiveConfig(){
+      public boolean suggestIdleInventory(){return true;}
+    });
+    check("".equals(suggestionQuery.invoke(inventoryOnEmpty)),"suggestIdleInventory=true with an empty inventory snapshot (the default) must still produce an empty query");
+
+    EviLivePlugin inventoryOn=new EviLivePlugin();
+    set(inventoryOn,"config",new EviLiveConfig(){
+      public boolean suggestIdleInventory(){return true;}
+    });
+    set(inventoryOn,"inventoryQuantities",snapshot);
+    check("includeInventory=1&inventory=995:50000000,4151:1,30810:11".equals(suggestionQuery.invoke(inventoryOn)),"Inventory items must be sent sorted by item ID for a deterministic query string");
+
+    // account: the same identifier already sent with every ingest packet, not a config setting --
+    // left off the query entirely before the first login this process has seen (null, the
+    // default), and included once known so the bridge can scope its cross-restart open-position
+    // fallback (pickPersistentOpenPosition, bridge/suggestions.mjs) to this account specifically.
+    EviLivePlugin accountPlugin=new EviLivePlugin();
+    set(accountPlugin,"config",new EviLiveConfig(){});
+    check("".equals(suggestionQuery.invoke(accountPlugin)),"No account known yet (null, the default) must be left off the query entirely");
+    set(accountPlugin,"account","deadbeef0123456789");
+    check("account=deadbeef0123456789".equals(suggestionQuery.invoke(accountPlugin)),"A known account must be sent as-is");
+    resetMethod.invoke(accountPlugin);
+    check("".equals(suggestionQuery.invoke(accountPlugin)),"reset() (login/profile/world-hop) must clear the account back to unknown until the next login completes");
+
     // cashStack: the player's actual current cash stack (from refreshCashStack(), not a config
     // setting) -- left off the query entirely while unknown (-1, the default before any tick has
     // run), and included as a plain integer once known, so a real reading of 0 gp (dead broke)
@@ -185,6 +222,16 @@ public final class EviLiveDeliveryTest {
     resetMethod.invoke(holdPlugin);
     check("".equals(suggestionQuery.invoke(holdPlugin)),"reset() (login/profile/world-hop) must clear held-for-resale too");
 
+    // Held.offerId / holdBuyId: the specific buy offer behind a held-for-resale item, when the
+    // observed Offer carried one, is appended to the query too -- lets a later "Personal use" flag
+    // mark that exact purchase (see flagPersonalUse) rather than the item broadly.
+    EviLivePlugin.Offer buyingWithId=new EviLivePlugin.Offer();buyingWithId.state="BUYING";buyingWithId.itemId=7;buyingWithId.name="Steel cannonballs";buyingWithId.filled=0;buyingWithId.offerId="buy-42";
+    EviLivePlugin.Offer boughtWithId=new EviLivePlugin.Offer();boughtWithId.state="BOUGHT";boughtWithId.itemId=7;boughtWithId.name="Steel cannonballs";boughtWithId.filled=1000;boughtWithId.offerId="buy-42";
+    updateHeld.invoke(holdPlugin,buyingWithId,boughtWithId);
+    updateHeld.invoke(holdPlugin,boughtWithId,collected);
+    check("holdItemId=7&holdQty=1000&holdName=Steel+cannonballs&holdBuyId=buy-42".equals(suggestionQuery.invoke(holdPlugin)),
+      "A held item's own buy offerId must be appended as holdBuyId, URL-encoded, after the existing hold fields");
+
     // activeSlotItemIds / skippedItemIds / refreshActiveSlotItemIds(): the plugin's own live,
     // session-only exclusions layered on top of the settings-driven query above -- never a config
     // setting, so an untouched config with nothing active or skipped still sends an empty query.
@@ -224,6 +271,179 @@ public final class EviLiveDeliveryTest {
     skipMethod.invoke(skipPlugin); // nothing cached now: must be a safe no-op, not throw or add anything
     check(skipPluginSkips.size()==1,"Calling skipSuggestion() again with nothing cached must not add anything or throw");
 
-    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building, the active-slot/skip exclude query building, and the skip-suggestion callback");
+    // flagPersonalUse(): the sidebar's "Mark as personal use" button callback. The session-local
+    // effects (skippedItemIds, clearing any live heldForResale entry, clearing suggestionCache) run
+    // synchronously before the bridge POST/re-poll is handed to the (here, null -- startUp() never
+    // ran) sender executor, so they're directly observable without needing a real executor.
+    Method flagMethod=EviLivePlugin.class.getDeclaredMethod("flagPersonalUse");flagMethod.setAccessible(true);
+
+    EviLivePlugin buyFlagPlugin=new EviLivePlugin();
+    SuggestionCache buyFlagCache=new SuggestionCache();
+    set(buyFlagPlugin,"suggestionCache",buyFlagCache);
+    buyFlagCache.set(EviLiveSuggestionTest.suggestion(11,"buy",100,10,20));
+    flagMethod.invoke(buyFlagPlugin); // a "buy" suggestion has nothing to mark
+    check(buyFlagCache.get()!=null,"Personal use on a \"buy\" suggestion must not clear or otherwise touch the cache");
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> buyFlagSkips=(java.util.Set<Integer>)get(buyFlagPlugin,"skippedItemIds");
+    check(buyFlagSkips.isEmpty(),"Personal use on a \"buy\" suggestion must not add anything to skippedItemIds");
+
+    EviLivePlugin noBuyIdFlagPlugin=new EviLivePlugin();
+    SuggestionCache noBuyIdCache=new SuggestionCache();
+    set(noBuyIdFlagPlugin,"suggestionCache",noBuyIdCache);
+    Suggestion sellNoBuyId=EviLiveSuggestionTest.suggestion(12,"sell",50,10,20); // buyId left null: no single buy identifiable
+    noBuyIdCache.set(sellNoBuyId);
+    flagMethod.invoke(noBuyIdFlagPlugin);
+    check(noBuyIdCache.get()!=null,"Personal use on a sell suggestion with no identifiable buyId must not clear the cache");
+
+    EviLivePlugin flagPlugin=new EviLivePlugin();
+    SuggestionCache flagCache=new SuggestionCache();
+    set(flagPlugin,"suggestionCache",flagCache);
+    Suggestion heldSuggestion=EviLiveSuggestionTest.suggestion(13,"sell",25,10,20);heldSuggestion.buyId="buy-99";
+    flagCache.set(heldSuggestion);
+    Map<Integer,EviLivePlugin.Held> flagHeld=(Map<Integer,EviLivePlugin.Held>)get(flagPlugin,"heldForResale");
+    flagHeld.put(13,new EviLivePlugin.Held(13,25,"Test item","buy-99"));
+    flagMethod.invoke(flagPlugin); // sender is null here (startUp() never ran): must not throw
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> flagSkips=(java.util.Set<Integer>)get(flagPlugin,"skippedItemIds");
+    check(flagSkips.contains(13),"Marking personal use must add the item to skippedItemIds, same as a manual skip");
+    check(flagCache.get()==null,"Marking personal use must clear the cache immediately so the panel doesn't show stale text");
+    check(!flagHeld.containsKey(13),"Marking personal use must clear any live heldForResale entry for the item too");
+
+    check("{\"buyId\":\"buy-99\",\"personal\":true}".equals(new Gson().toJson(new EviLivePlugin.PersonalUseRequest("buy-99"))),
+      "PersonalUseRequest's JSON shape must match what the bridge's POST /api/suggestion/personal-use expects");
+
+    // verifyPersistedHolding(): a "persisted" suggestion (the bridge's restart-safe reconstruction
+    // from journaled GE offers, see Suggestion.persisted's own doc) must be checked against the
+    // player's actual current inventory before being trusted -- a stale reconstruction (e.g. an
+    // old position that was, in reality, fully resold through separate sales the automatic
+    // matcher didn't perfectly reconcile) must never sit there forever crowding out a real,
+    // currently-held item behind it. This is exactly the failure reported live: an old, already
+    // fully-resold blue dragon hide position crowding out the genuinely-still-held eternal boots
+    // and zamorak chaps behind it. Exercised entirely through inventoryItemIds/
+    // inventorySnapshotEstablished (never through client.getItemContainer() directly): a real
+    // client.log confirmed a version of this method that called the Client API from here -- off
+    // the background poll thread, not an event-subscriber callback -- threw "AssertionError: must
+    // be called on client thread" on every single poll, so this now only ever reads a snapshot
+    // that onGameTick refreshes safely from the client thread (see refreshInventoryItemIds).
+    Method verify=EviLivePlugin.class.getDeclaredMethod("verifyPersistedHolding",Suggestion.class);verify.setAccessible(true);
+    EviLivePlugin verifyPlugin=new EviLivePlugin();
+    Suggestion held=EviLiveSuggestionTest.suggestion(5,"sell",2712,1000,1200);held.persisted=true;
+    check(((Boolean)verify.invoke(verifyPlugin,held)).booleanValue(),"Before the inventory has ever been successfully snapshotted this session, must fail open (verified), never silently suppress a real reminder");
+    set(verifyPlugin,"inventorySnapshotEstablished",true);
+    set(verifyPlugin,"inventoryItemIds",java.util.Set.of(5));
+    check(((Boolean)verify.invoke(verifyPlugin,held)).booleanValue(),"An item genuinely present in an established inventory snapshot must verify true");
+    set(verifyPlugin,"inventoryItemIds",java.util.Set.of());
+    check(!((Boolean)verify.invoke(verifyPlugin,held)).booleanValue(),"A confirmed, genuinely empty inventory (e.g. everything banked) must verify false -- it isn't actually held any more");
+    set(verifyPlugin,"inventoryItemIds",java.util.Set.of(9));
+    check(!((Boolean)verify.invoke(verifyPlugin,held)).booleanValue(),"An established snapshot that simply doesn't contain this item must verify false");
+
+    // correctSellQuantityAgainstInventory(): caps a "sell" suggestion's quantity down to what's
+    // actually in the inventory right now -- confirmed against a real report (a partially-filled,
+    // later-cancelled buy order left the journal correctly believing 13 were bought and never
+    // resold, but only 11 were actually still held).
+    Method correct=EviLivePlugin.class.getDeclaredMethod("correctSellQuantityAgainstInventory",Suggestion.class);correct.setAccessible(true);
+    EviLivePlugin correctPlugin=new EviLivePlugin();
+    correct.invoke(correctPlugin,(Suggestion)null); // must never throw on a null suggestion (pollSuggestion's s can be null)
+
+    Suggestion beforeSnapshot=EviLiveSuggestionTest.suggestion(30810,"sell",13,500000,550000);
+    correct.invoke(correctPlugin,beforeSnapshot);
+    check(beforeSnapshot.quantity==13,"Before the inventory has ever been successfully snapshotted this session, must fail open -- leave the quantity exactly as the bridge sent it");
+
+    set(correctPlugin,"inventorySnapshotEstablished",true);
+    set(correctPlugin,"inventoryQuantities",java.util.Map.of(30810,11));
+    Suggestion buySuggestion=EviLiveSuggestionTest.suggestion(30810,"buy",13,500000,550000);
+    correct.invoke(correctPlugin,buySuggestion);
+    check(buySuggestion.quantity==13,"A \"buy\" suggestion's quantity means something entirely different (how many to acquire) and must never be touched");
+
+    Suggestion overstated=EviLiveSuggestionTest.suggestion(30810,"sell",13,500000,550000);
+    correct.invoke(correctPlugin,overstated);
+    check(overstated.quantity==11,"An overstated sell quantity must be reduced to what's actually held");
+    check(overstated.reasoning.contains("Reduced from 13 to the 11"),"The reduction must be explained in the reasoning text, the same way cash/duration limits already are");
+
+    Suggestion exact=EviLiveSuggestionTest.suggestion(30810,"sell",11,500000,550000);
+    correct.invoke(correctPlugin,exact);
+    check(exact.quantity==11,"A quantity that already matches what's held must be left unchanged");
+
+    Suggestion understated=EviLiveSuggestionTest.suggestion(30810,"sell",5,500000,550000);
+    correct.invoke(correctPlugin,understated);
+    check(understated.quantity==5,"A quantity LOWER than what's actually held must never be increased -- there could be older stock this suggestion isn't even about");
+
+    Suggestion unknownItem=EviLiveSuggestionTest.suggestion(9999,"sell",7,500000,550000);
+    correct.invoke(correctPlugin,unknownItem);
+    check(unknownItem.quantity==7,"An item with no entry at all in the inventory snapshot (not what this correction is for) must be left alone, not zeroed out");
+
+    // pollSuggestion(): a persisted suggestion the inventory check rejects must be auto-skipped
+    // (same effect as the manual "Skip this suggestion" button above) and re-polled, never cached
+    // or shown to the player.
+    Method poll=EviLivePlugin.class.getDeclaredMethod("pollSuggestion",long.class);poll.setAccessible(true);
+    EviLivePlugin pollPlugin=new EviLivePlugin();
+    set(pollPlugin,"gson",new Gson());
+    set(pollPlugin,"config",new EviLiveConfig(){}); // suggestionQuery() (called at the top of every real pollSuggestion()) needs this
+    set(pollPlugin,"running",true);set(pollPlugin,"lifecycle",1L);
+    set(pollPlugin,"pluginKey","abcdef0123456789".repeat(4));
+    set(pollPlugin,"inventorySnapshotEstablished",true);
+    set(pollPlugin,"inventoryItemIds",java.util.Set.of()); // established, empty: item 5 is not actually held
+    set(pollPlugin,"transport",new LocalTransport(){
+      public int send(String key,String json)throws IOException {return 200;}
+      public String get(String key,String query)throws IOException {
+        return "{\"suggestion\":{\"itemId\":5,\"name\":\"Blue dragon hide\",\"action\":\"sell\",\"quantity\":2712,\"buyPrice\":1000,\"sellPrice\":1200,\"source\":\"holding\",\"reasoning\":\"stale\",\"persisted\":true}}";
+      }
+    });
+    poll.invoke(pollPlugin,1L); // sender is null here (startUp() never ran): the auto-retry attempt must not throw
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> pollPluginSkips=(java.util.Set<Integer>)get(pollPlugin,"skippedItemIds");
+    check(pollPluginSkips.contains(5),"A persisted suggestion for an item genuinely absent from the inventory must be auto-skipped, exactly like a manual skip");
+    check(get(pollPlugin,"suggestionCache")==null,"The rejected phantom suggestion must never reach suggestionCache (left uninitialized/untouched in this harness)");
+
+    // The same suggestion, but the item genuinely IS in the inventory: must be trusted and cached
+    // normally, exactly as an unpersisted (live-observed) suggestion always has been.
+    EviLivePlugin pollPlugin2=new EviLivePlugin();
+    set(pollPlugin2,"gson",new Gson());
+    set(pollPlugin2,"config",new EviLiveConfig(){});
+    set(pollPlugin2,"running",true);set(pollPlugin2,"lifecycle",1L);
+    set(pollPlugin2,"pluginKey","abcdef0123456789".repeat(4));
+    set(pollPlugin2,"suggestionCache",new SuggestionCache());
+    set(pollPlugin2,"openItemPriceCache",new OpenItemPriceCache());
+    set(pollPlugin2,"inventorySnapshotEstablished",true);
+    set(pollPlugin2,"inventoryItemIds",java.util.Set.of(5)); // genuinely still held
+    set(pollPlugin2,"transport",new LocalTransport(){
+      public int send(String key,String json)throws IOException {return 200;}
+      public String get(String key,String query)throws IOException {
+        return "{\"suggestion\":{\"itemId\":5,\"name\":\"Blue dragon hide\",\"action\":\"sell\",\"quantity\":2712,\"buyPrice\":1000,\"sellPrice\":1200,\"source\":\"holding\",\"reasoning\":\"real\",\"persisted\":true}}";
+      }
+    });
+    poll.invoke(pollPlugin2,1L);
+    SuggestionCache resultCache=(SuggestionCache)get(pollPlugin2,"suggestionCache");
+    check(resultCache.get()!=null && resultCache.get().itemId==5,"A persisted suggestion for an item genuinely still in the inventory must be cached and shown normally");
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> pollPlugin2Skips=(java.util.Set<Integer>)get(pollPlugin2,"skippedItemIds");
+    check(pollPlugin2Skips.isEmpty(),"A verified-real persisted suggestion must not be skipped");
+
+    // pollSuggestion() end-to-end: the bridge's remembered quantity (13, matching the journal) is
+    // higher than what's actually in the inventory right now (11) -- the exact real-world shape of
+    // the bug report this fix came from (a partially-filled buy order, cancelled, left a stale
+    // remaining count). Must come through corrected, not as the bridge originally sent it.
+    EviLivePlugin pollPlugin3=new EviLivePlugin();
+    set(pollPlugin3,"gson",new Gson());
+    set(pollPlugin3,"config",new EviLiveConfig(){});
+    set(pollPlugin3,"running",true);set(pollPlugin3,"lifecycle",1L);
+    set(pollPlugin3,"pluginKey","abcdef0123456789".repeat(4));
+    set(pollPlugin3,"suggestionCache",new SuggestionCache());
+    set(pollPlugin3,"openItemPriceCache",new OpenItemPriceCache());
+    set(pollPlugin3,"inventorySnapshotEstablished",true);
+    set(pollPlugin3,"inventoryItemIds",java.util.Set.of(30810)); // genuinely still held, just not 13 of it
+    set(pollPlugin3,"inventoryQuantities",java.util.Map.of(30810,11));
+    set(pollPlugin3,"transport",new LocalTransport(){
+      public int send(String key,String json)throws IOException {return 200;}
+      public String get(String key,String query)throws IOException {
+        return "{\"suggestion\":{\"itemId\":30810,\"name\":\"Contract of glyphic attenuation\",\"action\":\"sell\",\"quantity\":13,\"buyPrice\":500000,\"sellPrice\":550000,\"source\":\"holding\",\"reasoning\":\"You're holding 13 from an earlier buy\",\"persisted\":true}}";
+      }
+    });
+    poll.invoke(pollPlugin3,1L);
+    Suggestion corrected=((SuggestionCache)get(pollPlugin3,"suggestionCache")).get();
+    check(corrected!=null && corrected.quantity==11,"pollSuggestion must apply the inventory correction before caching, not just verify presence");
+    check(corrected.reasoning.contains("Reduced from 13 to the 11"),"The corrected suggestion's reasoning must explain the reduction");
+
+    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion callback, the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion or a sell suggestion with no identifiable buyId; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, and the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion)");
   }
 }
