@@ -1,6 +1,6 @@
 plugins { id 'java' }
 repositories {
-    maven { url = 'https://repo.runelite.net'; content { includeGroupByRegex('net\.runelite.*') } }
+    maven { url = 'https://repo.runelite.net'; content { includeGroupByRegex('net\\.runelite.*') } }
     mavenCentral()
 }
 // 1.12.38 predates net.runelite.client.util.Filepath (added 2026-09-15) and failed to compile;

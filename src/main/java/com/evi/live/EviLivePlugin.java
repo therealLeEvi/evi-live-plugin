@@ -28,7 +28,6 @@ import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
-import net.runelite.client.RuneLite;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
@@ -43,7 +42,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions. */
-@PluginDescriptor(name="EVI Live (Local)",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
+@PluginDescriptor(name="EVI Live (Local)",internalName="evi-live",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
 public class EviLivePlugin extends Plugin {
   private static final Logger log=LoggerFactory.getLogger(EviLivePlugin.class);
   @Inject private Client client;
@@ -158,15 +157,15 @@ public class EviLivePlugin extends Plugin {
   }
 
   @Override protected void startUp() throws Exception {
-    // Rooted at the same .runelite/evi-live/ location this plugin has always used, via the
-    // Unchecked legacy-directory entry point rather than Plugin#getPluginDirectory() -- that
-    // sanctioned accessor doesn't exist in the RuneLite client yet (checked against the current
-    // master source; only Filepath itself has landed so far), so it can't be called today without
-    // failing to compile. Using Unchecked here keeps continuity with any pairing key / identity
-    // salt a user already has on disk, at the documented cost (see Filepath's own javadoc) that a
-    // plugin using Unchecked doesn't qualify for the Hub's fully-automatic review path. Worth
-    // flagging to the maintainer when this goes back up, in case getPluginDirectory() is close.
-    Filepath dir=Filepath.Unchecked.getLegacyPluginDirectory(RuneLite.RUNELITE_DIR.toPath(),"evi-live");
+    // The sanctioned accessor: Plugin#getPluginDirectory(), which resolves to
+    // .runelite/plugin-data/<internalName>/ (internalName is set in @PluginDescriptor above and is
+    // required by that method). An earlier version called Filepath.Unchecked.getLegacyPluginDirectory
+    // instead, on the mistaken belief that getPluginDirectory() hadn't landed in the client yet; the
+    // Plugin Hub maintainer corrected that on runelite/plugin-hub#16640 ("you shouldn't be using
+    // unchecked, ever"), and it is indeed present in the client this builds against. Nothing here
+    // reads the old .runelite/evi-live/ folder any more: legacyDataDirectory is deliberately NOT set,
+    // per the same review, since only this developer's own machine ever had that folder.
+    Filepath dir=getPluginDirectory();
     dir.createDirectories();
     pairingPath=dir.joinSegment("plugin-key.txt");
     pluginKey=null;
@@ -223,7 +222,7 @@ public class EviLivePlugin extends Plugin {
         status("Pairing saved. Log in; connection is checked when the first snapshot is sent.");
       });
     }catch(IllegalArgumentException ex){status(ex.getMessage());}
-    catch(Exception ex){status("Could not save the key. Check write access to .runelite/evi-live.");}
+    catch(Exception ex){status("Could not save the key. Check write access to .runelite/plugin-data/evi-live.");}
   }
   // Filepath has no Files.readString()-equivalent single-call helper, so this reads the whole
   // (small, single-line) file through its buffered UTF-8 Reader and trims it the same way the
