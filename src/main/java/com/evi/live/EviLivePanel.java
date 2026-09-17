@@ -35,7 +35,7 @@ final class EviLivePanel extends PluginPanel {
   private final JTextArea status = bodyText("Waiting for setup.");
   private final JTextArea suggestion = bodyText("No suggestion yet.");
 
-  EviLivePanel(Consumer<String> pair, Runnable skip) {
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse) {
     setLayout(new BorderLayout());
     setBackground(ColorScheme.DARK_GRAY_COLOR);
 
@@ -73,6 +73,12 @@ final class EviLivePanel extends PluginPanel {
     skipButton.addActionListener(e -> skip.run());
     content.add(Box.createVerticalStrut(6));
     content.add(skipButton);
+    JButton personalUseButton = secondaryButton("Mark as personal use");
+    personalUseButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+    personalUseButton.getAccessibleContext().setAccessibleDescription("For a \"you're holding this, sell it\" suggestion: marks this one purchase as bought for your own use, not a flip. It won't be suggested again and won't count toward profit if sold. Only this purchase -- buying this item again later is unaffected.");
+    personalUseButton.addActionListener(e -> personalUse.run());
+    content.add(Box.createVerticalStrut(6));
+    content.add(personalUseButton);
 
     // -- Pairing --
     content.add(section());
