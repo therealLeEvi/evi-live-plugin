@@ -39,4 +39,14 @@ class Suggestion {
   String reasoning;
   boolean persisted;
   String buyId;
+  // "Sell" (holding) suggestions only, and only when the real price paid is known -- otherwise
+  // null, never estimated. breakEvenPrice: the lowest sell price per unit that doesn't lose money
+  // after GE tax. lossIfSoldNow: set only when selling at sellPrice right now would lose money, the
+  // total GP lost. Shown as a warning; a losing sell is never hidden or blocked.
+  Integer breakEvenPrice;
+  Long lossIfSoldNow;
+
+  boolean sellsAtLoss() {
+    return "sell".equals(action) && lossIfSoldNow != null && lossIfSoldNow > 0;
+  }
 }

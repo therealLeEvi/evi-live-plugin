@@ -107,7 +107,8 @@ class SuggestionHintWidget {
     switch (field) {
       case QUANTITY: return "EVI: press " + key + " for quantity " + format(s.quantity);
       case BUY_PRICE: return "EVI: press " + key + " for buy price " + format(s.buyPrice) + " gp";
-      case SELL_PRICE: return "EVI: press " + key + " for sell price " + format(s.sellPrice) + " gp";
+      case SELL_PRICE: return "EVI: press " + key + " for sell price " + format(s.sellPrice) + " gp"
+        + (s.sellsAtLoss() && s.breakEvenPrice != null ? " - LOSS, break-even " + format(s.breakEvenPrice) + " gp" : "");
       default: return "";
     }
   }

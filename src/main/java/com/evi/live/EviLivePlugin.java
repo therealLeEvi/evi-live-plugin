@@ -87,6 +87,20 @@ public class EviLivePlugin extends Plugin {
   // offer had been placed.
   private final Set<Integer> skippedItemIds=ConcurrentHashMap.newKeySet();
   private volatile Set<Integer> activeSlotItemIds=Collections.emptySet();
+  // A lighter, immutable snapshot of only the still-in-progress (non-terminal: BUYING or SELLING,
+  // not yet fully filled/cancelled) offers among the same slots[] activeSlotItemIds is built from --
+  // same client-thread-writes/background-thread-reads shape (hence volatile) as activeSlotItemIds
+  // just above, kept alongside it in refreshActiveSlotItemIds() rather than recomputed separately.
+  // This is what suggestionQuery()'s slots= param and pollSuggestion()'s offer-drift hint (see
+  // offerDriftHint) are built from -- unlike exclude=, a terminal-but-uncollected offer has nothing
+  // left to cancel or relist, so it's deliberately left out of this one.
+  private volatile List<ActiveOffer> activeOffers=Collections.emptyList();
+  // Every non-EMPTY GE slot, in slot order -- including bought/sold/cancelled offers still waiting to
+  // be collected, unlike activeOffers above -- purely for the sidebar's "Active offers" list, so the
+  // player can see everything sitting in the GE at a glance. Rebuilt alongside activeOffers in
+  // refreshActiveSlotItemIds() and pushed to the panel from there, so the list follows GE changes
+  // immediately rather than waiting for the next 2-second suggestion poll.
+  private volatile List<OfferRow> geOfferRows=Collections.emptyList();
   // The player's actual current cash stack, read from their own inventory's coins (item 995) on
   // the client thread every tick and cached here for the background poll thread to read (hence
   // volatile) -- never fabricated or assumed. -1 means "not yet known" (e.g. before the inventory
@@ -106,6 +120,13 @@ public class EviLivePlugin extends Plugin {
   // or it just isn't the current #1 suggestion, meant no hint/fill at all, even while buying or
   // selling it with a live GE price readily available).
   private volatile int openOfferItemId=-1;
+  // Whether the world currently logged into is a members world, read on the client thread every
+  // tick like cashStack/openOfferItemId above and cached here (volatile) for the poll thread. A
+  // members-only item cannot be traded on a free-to-play world at all, so the bridge needs to know
+  // which kind of world this is before suggesting one. Boolean (not boolean) so "not known yet",
+  // before login, stays distinct from "free-to-play world" -- unknown sends nothing and filters
+  // nothing, same fail-open rule as every other signal here.
+  private volatile Boolean membersWorld=null;
   // A snapshot of every item ID currently present (quantity > 0) in the player's inventory, read
   // on the client thread every tick and cached here (volatile) for the background poll thread to
   // read -- same pattern as cashStack/openOfferItemId above, and for the same reason: RuneLite's
@@ -147,8 +168,14 @@ public class EviLivePlugin extends Plugin {
     // offerId: the specific buy offer this holding came from, when known -- carried through to the
     // bridge as holdBuyId (see suggestionQuery()) so a "Personal use" flag on the resulting
     // suggestion (see flagPersonalUse) marks that exact purchase, never just "this item ID" broadly.
-    final int itemId,quantity;final String name,offerId;
-    Held(int itemId,int quantity,String name,String offerId){this.itemId=itemId;this.quantity=quantity;this.name=name;this.offerId=offerId;}
+    // price: the REAL average price actually paid per unit (the buy offer's own spent/filled at
+    // the moment it was collected -- never the offer's set/max price, which can differ from what
+    // actually filled) -- sent to the bridge as holdBuyPrice so the "you're holding this" reminder
+    // can say whether selling right now is a profit or a loss, instead of a plain "sell near X gp"
+    // that reads identically either way. See suggestionQuery() and computeHoldingSuggestion's own
+    // doc in suggestions.mjs for the exact failure this exists to fix.
+    final int itemId,quantity,price;final String name,offerId;
+    Held(int itemId,int quantity,String name,String offerId,int price){this.itemId=itemId;this.quantity=quantity;this.name=name;this.offerId=offerId;this.price=price;}
   }
 
   @Provides
@@ -179,7 +206,7 @@ public class EviLivePlugin extends Plugin {
     salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse);
+      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld);
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
@@ -203,6 +230,7 @@ public class EviLivePlugin extends Plugin {
     suggestionCache.set(null);
     openItemPriceCache.set(null);
     updatePanelSuggestion(null, null);
+    updatePanelOfferHint(Collections.emptyList(), null, null);
     try { suggestionHintWidget.clear(); } catch (Exception ignored) { }
     try { itemSelectWidget.clear(); } catch (Exception ignored) { }
     if(navigation!=null)toolbar.removeNavigation(navigation);
@@ -235,7 +263,7 @@ public class EviLivePlugin extends Plugin {
       return sb.toString().trim();
     }
   }
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();skippedItemIds.clear();cashStack=-1;openOfferItemId=-1;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -250,7 +278,13 @@ public class EviLivePlugin extends Plugin {
   private void updateHeldForResale(Offer old,Offer n) {
     if(old==null)return;
     if(buy(old.state) && !"EMPTY".equals(old.state) && "EMPTY".equals(n.state) && old.filled>0) {
-      heldForResale.put(old.itemId,new Held(old.itemId,old.filled,old.name,old.offerId));
+      // The REAL average price paid per unit -- old.spent/old.filled, i.e. what the GE actually
+      // charged, never old.price (the offer's set/max price, which a buy can fill below). old.spent
+      // can legitimately be 0 or unset on data observed before this field existed; that's sent as
+      // price 0, which computeHoldingSuggestion (bridge side) already treats as "unknown, fall back
+      // to the plain reminder" -- never a fabricated/guessed cost basis.
+      int avgPrice=old.spent>0?(int)Math.round(old.spent/(double)old.filled):0;
+      heldForResale.put(old.itemId,new Held(old.itemId,old.filled,old.name,old.offerId,avgPrice));
     }
     if(!"EMPTY".equals(n.state) && !buy(n.state)) {
       heldForResale.remove(n.itemId);
@@ -370,13 +404,29 @@ public class EviLivePlugin extends Plugin {
     try { openOfferItemId = geOffer.isSlotOpen() ? geOffer.currentItemId() : -1; }
     catch(Exception ex){ openOfferItemId=-1; }
   }
+  // Refreshes membersWorld (see its own field doc) from the client's world type every tick, same
+  // defensive pattern as the refreshes above: a lookup hiccup leaves it at "not known".
+  private void refreshMembersWorld() {
+    try { java.util.Set<net.runelite.api.WorldType> types=client.getWorldType(); membersWorld=types==null?null:types.contains(net.runelite.api.WorldType.MEMBERS); }
+    catch(Exception ex){ membersWorld=null; }
+  }
   // Recomputes activeSlotItemIds from the current slots[] snapshot; must be called (on the client
   // thread, same as every other slots[] mutation) right after any change to that array so the
   // poll thread's view never goes stale for longer than one game tick.
   private void refreshActiveSlotItemIds() {
     Set<Integer> ids=new TreeSet<>();
-    for(Offer o:slots)if(o!=null && !"EMPTY".equals(o.state))ids.add(o.itemId);
+    List<ActiveOffer> offers=new ArrayList<>();
+    List<OfferRow> rows=new ArrayList<>();
+    for(Offer o:slots) {
+      if(o==null || "EMPTY".equals(o.state))continue;
+      ids.add(o.itemId);
+      if(!terminal(o))offers.add(new ActiveOffer(o.itemId,o.price,buy(o.state),o.name,Math.max(0,o.total-o.filled)));
+      rows.add(new OfferRow(o.slot,o.itemId,o.price,o.filled,o.total,buy(o.state),o.name,o.state));
+    }
     activeSlotItemIds=ids;
+    activeOffers=offers;
+    geOfferRows=Collections.unmodifiableList(rows);
+    if(panel!=null)panel.offers(geOfferRows);
   }
 
   @Subscribe public void onGameStateChanged(GameStateChanged e) {
@@ -392,6 +442,7 @@ public class EviLivePlugin extends Plugin {
     refreshCashStack();
     refreshInventoryItemIds();
     refreshOpenOfferItemId();
+    refreshMembersWorld();
     String current=configManager.getRSProfileKey();
     if(current==null)return;
     String currentEconomy=EconomyScope.of(client.getWorldType());
@@ -502,7 +553,8 @@ public class EviLivePlugin extends Plugin {
       correctSellQuantityAgainstInventory(s);
       suggestionCache.set(s);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
-      updatePanelSuggestion(s,s==null?"No eligible reviewed flip is currently profitable.":null);
+      updatePanelSuggestion(s,s==null?noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion()):null);
+      updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill);
     } catch(Throwable ex){
       // Deliberately catches Throwable, not just Exception, and kept that way permanently: a
       // periodic ScheduledExecutorService task that lets ANY throwable escape -- including an
@@ -560,14 +612,47 @@ public class EviLivePlugin extends Plugin {
       pollSuggestion(lifecycle);
     });
   }
+  // Called only from the sidebar's "I don't have this anymore" button (Swing EDT). The in-game
+  // counterpart of the scanner's "Still held" close buttons, for the case this plugin cannot detect
+  // on its own: a holding EVI reconstructed from its journal that the player has since used in-game
+  // or sold while EVI wasn't watching. The inventory check (verifyPersistedHolding) only suppresses
+  // such a suggestion for the current session -- and only when the item isn't in the inventory,
+  // which a banked item also isn't -- so without this the same stale reminder came back after every
+  // restart. Marks it with the bridge for good (POST /api/suggestion/not-held -> Store.closePosition),
+  // which keeps whatever part of that purchase EVI did see sold counted as profit and drops only the
+  // remainder. Like flagPersonalUse, the session-local exclusion applies immediately whether or not
+  // the bridge call lands, and the call itself runs on the background sender, never the Swing thread.
+  private void flagNotHeld() {
+    Suggestion s=suggestionCache.get();
+    if(s==null)return;
+    if(!"sell".equals(s.action) || s.buyId==null || s.buyId.isEmpty()) {
+      if(panel!=null)panel.suggestion("\"I don't have this anymore\" only applies to a \"you're holding this\" suggestion EVI can trace back to one specific buy.");
+      return;
+    }
+    String key=pluginKey,buyId=s.buyId;
+    skippedItemIds.add(s.itemId);
+    heldForResale.remove(s.itemId);
+    suggestionCache.set(null);
+    updatePanelSuggestion(null,"Marked as no longer held. Checking for the next suggestion...");
+    if(running && sender!=null)sender.execute(()->{
+      if(key!=null){try{transport.markNotHeld(key,gson.toJson(new NotHeldRequest(buyId)));}catch(Exception ignored){}}
+      pollSuggestion(lifecycle);
+    });
+  }
   // Built from this plugin's own local config plus live, session-only state (never from observed
   // content) and sent as the GET /api/suggestion query string. Each part is left off entirely
   // when it's at its default/empty, so an untouched config with nothing active or skipped sends
   // an empty query, unchanged from before any of these existed.
   private String suggestionQuery() {
     StringBuilder q=new StringBuilder();
-    int minProfit=config.minProfitThreshold();
-    if(minProfit>0)q.append("minProfit=").append(minProfit);
+    MinProfitTier minProfit=config.minProfitThreshold();
+    if(minProfit!=null && minProfit.gp()>0)q.append("minProfit=").append(minProfit.gp());
+    // Opt-in pre-buy safety check (EviLiveConfig.marginSafetyCushion(), off by default): tells the
+    // bridge to skip -- and rank the next-best candidate instead of -- any "buy" suggestion whose
+    // predicted margin doesn't clear that specific item's own recent price volatility. See
+    // marginClearsCushion in bridge/suggestions.mjs for exactly what this does and doesn't check.
+    // Left off entirely when disabled, same treatment as every other setting here.
+    if(config.marginSafetyCushion()){if(q.length()>0)q.append('&');q.append("cushion=1");}
     String blocklist=sanitizeBlocklist(config.itemBlocklist());
     if(!blocklist.isEmpty()){if(q.length()>0)q.append('&');q.append("blocklist=").append(blocklist);}
     RiskLevel risk=config.riskLevel();
@@ -575,6 +660,15 @@ public class EviLivePlugin extends Plugin {
     if(config.includeMarketSuggestions()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
     TradeDuration duration=config.tradeDuration();
     if(duration!=null && duration.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(duration.minutes());}
+    // Price-direction forecast for a "buy" suggestion (see ForecastHorizon/ForecastPolicy). Both
+    // left off entirely when forecastHorizon is OFF (the default), so an untouched config costs no
+    // extra bridge-side Wiki API call and changes nothing -- same treatment as every setting above.
+    ForecastHorizon horizon=config.forecastHorizon();
+    if(horizon!=null && horizon.param()!=null) {
+      if(q.length()>0)q.append('&');q.append("forecast=").append(horizon.param());
+      ForecastPolicy policy=config.forecastPolicy();
+      if(policy!=null){q.append("&onForecast=").append(policy.param());}
+    }
     // The same account identifier already sent with every ingest packet (see Packet.account),
     // included here too once known (null only before the first login this process has seen) so the
     // bridge can scope its own cross-restart open-position fallback to this account specifically --
@@ -586,6 +680,11 @@ public class EviLivePlugin extends Plugin {
     // when not yet known (cashStack==-1, e.g. the very first ticks after login), same treatment
     // as every other session-only signal here.
     if(cashStack>=0){if(q.length()>0)q.append('&');q.append("cash=").append(cashStack);}
+    // Session-only, not a config setting: which kind of world this is (see membersWorld), so the
+    // bridge never suggests a members-only item on a free-to-play world, where it can't be traded.
+    // Left off entirely until known, exactly like cash= above.
+    Boolean members=membersWorld;
+    if(members!=null){if(q.length()>0)q.append('&');q.append("members=").append(members?1:0);}
     // Session-only, not a config setting: items to leave out of ranking right now because you
     // already have an active/uncollected GE slot for them (activeSlotItemIds, auto-detected) or
     // you manually skipped them via the sidebar (skippedItemIds). Merged and sorted here so the
@@ -598,6 +697,26 @@ public class EviLivePlugin extends Plugin {
       q.append("exclude=");
       boolean first=true;
       for(int id:exclude){if(!first)q.append(',');q.append(id);first=false;}
+    }
+    // Session-only, not a config setting: item IDs (with each one's own remaining, unfilled
+    // quantity) behind any still-in-progress (non-terminal) active GE offer (activeOffers, see its
+    // own field doc) -- distinct from exclude= above, which also covers terminal/uncollected slots
+    // that have nothing left to cancel and so need no live price at all. Lets the bridge return a
+    // plain current market price for each one (slotPrices in the response, for offerDriftHint) and,
+    // only when a target trade duration is set, a rough volume-based fill-time estimate for it too
+    // (slotFill, for offerFillHint) -- both at zero extra Wiki API cost beyond what's already
+    // fetched. Remaining quantities are summed per item ID (TreeMap, same reasoning as the sorted
+    // `exclude` set and the `inventory=` map below: two separate offers for the same item collapse
+    // into one deterministic entry) rather than sent as separate, possibly-conflicting pairs. Empty
+    // whenever nothing's in progress, same treatment as every other session-only signal here.
+    List<ActiveOffer> offers=activeOffers;
+    if(!offers.isEmpty()) {
+      Map<Integer,Integer> slotQuantities=new TreeMap<>();
+      for(ActiveOffer o:offers)slotQuantities.merge(o.itemId,o.remaining,Integer::sum);
+      if(q.length()>0)q.append('&');
+      q.append("slots=");
+      boolean first=true;
+      for(Map.Entry<Integer,Integer> e:slotQuantities.entrySet()){if(!first)q.append(',');q.append(e.getKey()).append(':').append(e.getValue());first=false;}
     }
     // Session-only, not a config setting: an item you already bought and collected this session
     // that hasn't been resold yet (heldForResale, see updateHeldForResale()) -- sent so the bridge
@@ -616,6 +735,11 @@ public class EviLivePlugin extends Plugin {
       // flagPersonalUse), not just "this item ID" broadly.
       if(held.offerId!=null && !held.offerId.isEmpty())
         q.append("&holdBuyId=").append(URLEncoder.encode(held.offerId,StandardCharsets.UTF_8));
+      // The real average price this was actually bought at, when known (see Held.price's own
+      // doc) -- lets the resulting "you're holding this" reminder say whether selling right now is
+      // a profit or a loss, instead of a plain "sell near X gp" either way. Left off entirely when
+      // 0/unknown, same treatment as every other optional signal here.
+      if(held.price>0)q.append("&holdBuyPrice=").append(held.price);
     }
     // Session-only, not a config setting: the item currently selected in an open GE offer (see
     // openOfferItemId's own field doc), so the bridge can return a plain live-market price for it
@@ -653,16 +777,142 @@ public class EviLivePlugin extends Plugin {
     }
     return out.toString();
   }
+  // What the sidebar says when the bridge answered but had nothing to suggest. It used to always say
+  // "No eligible reviewed flip is currently profitable." -- wrong with market-wide suggestions on
+  // (those were checked too), and silent about the margin-safety check, which in practice was the
+  // thing skipping every candidate. Pure, so it's tested directly.
+  static String noSuggestionMessage(boolean includeMarket, boolean cushion) {
+    String base=includeMarket
+      ?"Nothing passes your settings right now -- neither your reviewed flips nor a market-wide pick."
+      :"No eligible reviewed flip is currently profitable. (Market-wide suggestions are off.)";
+    return cushion
+      ?base+" \"Require margin above price noise\" is on, and it currently skips most candidates -- turn it off to see them."
+      :base;
+  }
   private void updatePanelSuggestion(Suggestion s, String diag) {
     if(panel==null)return;
-    if(s==null){panel.suggestion(diag);return;}
-    panel.suggestion(String.format("%s x%,d — buy %,d gp / sell %,d gp%s",s.name,s.quantity,s.buyPrice,s.sellPrice,s.reasoning==null||s.reasoning.isEmpty()?"":" — "+s.reasoning));
+    if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);return;}
+    // A sell that would lose money right now is still shown -- it's the player's call -- but flagged
+    // up front with its break-even price and the card turns orange, so it can't read like a normal flip.
+    String warning=s.sellsAtLoss()
+      ?String.format("LOSS if sold now: about %,d gp.%s ",s.lossIfSoldNow,s.breakEvenPrice==null?"":String.format(" Break-even: %,d gp.",s.breakEvenPrice))
+      :"";
+    panel.suggestion(warning+String.format("%s x%,d — buy %,d gp / sell %,d gp%s",s.name,s.quantity,s.buyPrice,s.sellPrice,s.reasoning==null||s.reasoning.isEmpty()?"":" — "+s.reasoning));
+    panel.suggestionWarning(s.sellsAtLoss());
+  }
+  // How far an active offer's own set price may drift from today's market (buyPrice for a buy
+  // offer, sellPrice for a sell offer -- the exact same two roles every other suggestion in this
+  // plugin already uses, never a different interpretation of the market data) before it's worth
+  // flagging. Generous enough to ignore ordinary short-term volatility rather than nagging about
+  // every few-percent wobble.
+  private static final double OFFER_DRIFT_THRESHOLD=0.05;
+  // Pure and independently testable: never touches the game or the offer itself, only ever returns
+  // a sentence for the sidebar (see updatePanelOfferHint) so the player can decide whether to cancel
+  // and relist nearer the market, or just let it ride -- matches this plugin's "hints only, EVI
+  // never opens a menu or confirms an offer itself" design exactly like everything else here. Returns
+  // null when nothing's worth flagging: no live price for that item yet, or the drift is within
+  // OFFER_DRIFT_THRESHOLD.
+  private static String offerDriftHint(ActiveOffer o, Suggestion price) {
+    if(price==null || o.price<=0)return null;
+    if(o.buying) {
+      int ref=price.buyPrice;
+      if(ref<=0)return null;
+      double drift=(ref-o.price)/(double)ref; // positive: offer priced below today's market
+      if(drift>OFFER_DRIFT_THRESHOLD)
+        return String.format("Your buy offer for %s is priced at %,d gp, but today's market is around %,d gp (%.0f%% below) -- it may sit unfilled. Consider cancelling and relisting closer to the market price.",o.name,o.price,ref,drift*100);
+    } else {
+      int ref=price.sellPrice;
+      if(ref<=0)return null;
+      double drift=(o.price-ref)/(double)ref; // positive: offer priced above today's market
+      if(drift>OFFER_DRIFT_THRESHOLD)
+        return String.format("Your sell offer for %s is priced at %,d gp, but today's market is around %,d gp (%.0f%% above) -- it may sit unfilled. Consider cancelling and relisting closer to the market price, or selling at the current price.",o.name,o.price,ref,drift*100);
+    }
+    return null;
+  }
+  // Turns minutes into a short, human phrase for offerFillHint's message -- never more precise than
+  // "roughly N hours", since the underlying estimate itself is only ever a rough one.
+  private static String formatMinutes(int minutes) {
+    if(minutes<60)return minutes+" minute"+(minutes==1?"":"s");
+    int hours=Math.round(minutes/60f);
+    return hours+" hour"+(hours==1?"":"s");
+  }
+  // Whether the REMAINING quantity of an in-progress offer is trading noticeably slower than the
+  // player's own target trade duration -- purely from the bridge's rough, volume-based estimate
+  // (estimateOfferFill in suggestions.mjs, itself just the OSRS Wiki API's last-hour trading volume
+  // for that item). This is never a fill guarantee, and the wording below must stay that way: a
+  // "recent volume" observation, not a prediction of what THIS specific offer will do -- there is no
+  // real order-book visibility in this data at all (no queue position, no depth at other prices).
+  // Pure and independently testable, exactly like offerDriftHint. Returns null when there's nothing
+  // to flag: no estimate for this item (fill==null -- no target duration set, or no recent volume
+  // data at all for it), or the estimate says it's on pace.
+  private static String offerFillHint(ActiveOffer o, OfferFillEstimate fill) {
+    if(fill==null || fill.likelyToFillInTime)return null;
+    String pace=fill.estimatedFillMinutes<0
+      ?"there's been almost no recent trading volume for it at all"
+      :"recent volume suggests its remaining quantity typically takes roughly "+formatMinutes(fill.estimatedFillMinutes)+" to trade";
+    return String.format("Your %s offer for %s (%,d remaining) is running longer than your target trade duration -- %s. This is a rough volume-based estimate, not a guarantee either way -- consider adjusting the price or quantity, or cancelling if you need it sooner.",o.buying?"buy":"sell",o.name,o.remaining,pace);
+  }
+  // Matches each still-in-progress offer (activeOffers, itself already excluding terminal ones --
+  // see refreshActiveSlotItemIds) against the live price and fill estimate the bridge just returned
+  // for it (slotPrices/slotFill, requested via suggestionQuery()'s slots= param) and joins every
+  // resulting hint into one sidebar message -- both a price-drift hint and a fill-time hint can
+  // apply to the same offer at once. A linear scan, not a map -- there are at most 8 GE slots, so
+  // this is always trivially small. Never throws on a missing/short slotPrices/slotFill array;
+  // simply skips any offer with no match.
+  private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill) {
+    if(panel==null)return;
+    if(offers.isEmpty()){panel.offerHint(null);return;}
+    StringBuilder combined=new StringBuilder();
+    for(ActiveOffer o:offers) {
+      Suggestion price=null;
+      if(slotPrices!=null)for(Suggestion p:slotPrices)if(p!=null && p.itemId==o.itemId){price=p;break;}
+      OfferFillEstimate fill=null;
+      if(slotFill!=null)for(OfferFillEstimate f:slotFill)if(f!=null && f.itemId==o.itemId){fill=f;break;}
+      String priceHint=offerDriftHint(o,price);
+      String fillHint=offerFillHint(o,fill);
+      if(priceHint!=null){if(combined.length()>0)combined.append("\n\n");combined.append(priceHint);}
+      if(fillHint!=null){if(combined.length()>0)combined.append("\n\n");combined.append(fillHint);}
+    }
+    panel.offerHint(combined.length()>0?combined.toString():null);
   }
   static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;}
   static class Packet {int version=1;String session,account;long seq,ts;boolean loggedIn;List<Offer> offers=new ArrayList<>();}
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;}
+  // Immutable per-offer snapshot for the sidebar's cancel/relist hint (offerDriftHint) -- separate
+  // from Offer itself because an Offer instance is wholesale-replaced by capture() on every change
+  // (see slots[]'s own doc), which is fine for slots[] (client-thread-only) but this one specifically
+  // needs a cross-thread-safe reference, exactly like activeSlotItemIds just above it.
+  static final class ActiveOffer {
+    final int itemId,price,remaining;final boolean buying;final String name;
+    ActiveOffer(int itemId,int price,boolean buying,String name,int remaining){this.itemId=itemId;this.price=price;this.buying=buying;this.name=name;this.remaining=remaining;}
+  }
+  // Immutable per-slot snapshot for the sidebar's "Active offers" list (see geOfferRows). state is
+  // the raw GrandExchangeOfferState name (BUYING, SOLD, CANCELLED_BUY, ...); EviLivePanel turns it
+  // into display text.
+  static final class OfferRow {
+    final int slot,itemId,price,filled,total;final boolean buying;final String name,state;
+    OfferRow(int slot,int itemId,int price,int filled,int total,boolean buying,String name,String state){this.slot=slot;this.itemId=itemId;this.price=price;this.filled=filled;this.total=total;this.buying=buying;this.name=name;this.state=state;}
+  }
+  // slotPrices reuses Suggestion the same way openItemPrice already does just above it -- the
+  // bridge's GET /api/suggestion sends each entry as {itemId,buyPrice,sellPrice} (see
+  // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
+  // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
+  // get matched back up against activeOffers by itemId.
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;}
+  // One entry per in-progress offer the bridge could judge against the player's own "Target trade
+  // duration" setting -- see estimateOfferFill in suggestions.mjs for exactly what this is (a rough
+  // volume-based estimate from the OSRS Wiki API's own last-hour trading data, never a fill
+  // guarantee) and offerFillHint for how it's turned into sidebar text. estimatedFillMinutes is -1
+  // when there's essentially no recent trading volume at all for this item (see its own doc on the
+  // bridge side for why -1, not a fabricated number or JSON null). Only ever populated when the
+  // player has a target duration set; otherwise the bridge sends an empty array and this costs
+  // nothing, exactly like slotPrices above it.
+  static final class OfferFillEstimate {int itemId;boolean likelyToFillInTime;int estimatedFillMinutes;}
   // Request body for POST /api/suggestion/personal-use (see flagPersonalUse and
   // LocalTransport.markPersonalUse). personal defaults true -- this plugin only ever flags, never
   // unflags, today; the field exists on the bridge side for a possible future undo.
   static class PersonalUseRequest {String buyId;boolean personal=true;PersonalUseRequest(String buyId){this.buyId=buyId;}}
+  // Request body for POST /api/suggestion/not-held (see flagNotHeld and LocalTransport.markNotHeld).
+  // reason mirrors Store.closePosition's own two values; the sidebar offers the general "gone some
+  // way EVI couldn't see" case, which is sold-untracked.
+  static class NotHeldRequest {String buyId;String reason="sold-untracked";NotHeldRequest(String buyId){this.buyId=buyId;}}
 }

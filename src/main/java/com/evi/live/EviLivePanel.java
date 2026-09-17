@@ -7,6 +7,8 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -34,8 +36,10 @@ import net.runelite.client.ui.PluginPanel;
 final class EviLivePanel extends PluginPanel {
   private final JTextArea status = bodyText("Waiting for setup.");
   private final JTextArea suggestion = bodyText("No suggestion yet.");
+  private final JTextArea offerHint = bodyText("");
+  private final JPanel offerList = new JPanel();
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse) {
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld) {
     setLayout(new BorderLayout());
     setBackground(ColorScheme.DARK_GRAY_COLOR);
 
@@ -79,6 +83,28 @@ final class EviLivePanel extends PluginPanel {
     personalUseButton.addActionListener(e -> personalUse.run());
     content.add(Box.createVerticalStrut(6));
     content.add(personalUseButton);
+    JButton notHeldButton = secondaryButton("I don't have this anymore");
+    notHeldButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+    notHeldButton.getAccessibleContext().setAccessibleDescription("For a \"you're holding this, sell it\" suggestion about something you no longer have: used in-game, or sold while EVI wasn't running. It stops being suggested for good, and whatever part of it EVI saw sold still counts toward profit.");
+    notHeldButton.addActionListener(e -> notHeld.run());
+    content.add(Box.createVerticalStrut(6));
+    content.add(notHeldButton);
+
+    // -- Active offers: one row per occupied GE slot (see offers()), so everything sitting in the
+    // GE is visible at a glance, followed by any cancel/relist or slow-fill hint for those offers
+    // (see EviLivePlugin.offerDriftHint/offerFillHint), hidden when there's nothing to flag. Text
+    // only, same as every other panel element here -- EVI never opens a menu, clicks a button, or
+    // touches the offer itself; the player decides whether to act on it. --
+    content.add(section());
+    content.add(sectionHeader("Active offers"));
+    offerList.setLayout(new BoxLayout(offerList, BoxLayout.Y_AXIS));
+    offerList.setOpaque(false);
+    offerList.setAlignmentX(Component.LEFT_ALIGNMENT);
+    renderOffers(Collections.emptyList());
+    content.add(offerList);
+    offerHint.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
+    offerHint.setVisible(false);
+    content.add(offerHint);
 
     // -- Pairing --
     content.add(section());
@@ -115,6 +141,93 @@ final class EviLivePanel extends PluginPanel {
 
   void suggestion(String message) {
     SwingUtilities.invokeLater(() -> suggestion.setText(message == null || message.isEmpty() ? "No suggestion yet." : message));
+  }
+
+  /** Orange suggestion text for a sell that would lose money right now; brand teal otherwise. */
+  void suggestionWarning(boolean loss) {
+    SwingUtilities.invokeLater(() -> suggestion.setForeground(loss ? ColorScheme.PROGRESS_INPROGRESS_COLOR : EviTheme.BRAND));
+  }
+
+  void offerHint(String message) {
+    SwingUtilities.invokeLater(() -> {
+      boolean any = message != null && !message.isEmpty();
+      offerHint.setText(any ? message : "");
+      offerHint.setVisible(any);
+    });
+  }
+
+  /** Replaces the Active offers list with one row per occupied GE slot. Safe from any thread. */
+  void offers(List<EviLivePlugin.OfferRow> rows) {
+    List<EviLivePlugin.OfferRow> snapshot = rows == null ? Collections.emptyList() : rows;
+    SwingUtilities.invokeLater(() -> renderOffers(snapshot));
+  }
+
+  /** EDT only; offers() is the thread-safe entry point. Package-private so the panel test can
+   *  render synchronously. */
+  void renderOffers(List<EviLivePlugin.OfferRow> rows) {
+    offerList.removeAll();
+    if (rows.isEmpty()) {
+      offerList.add(bodyText("No offers in the Grand Exchange."));
+    } else {
+      for (EviLivePlugin.OfferRow row : rows) {
+        offerList.add(offerRow(row));
+        offerList.add(Box.createVerticalStrut(4));
+      }
+    }
+    offerList.revalidate();
+    offerList.repaint();
+  }
+
+  /** e.g. "BUY  Steel cannonball". */
+  static String offerTitle(EviLivePlugin.OfferRow row) {
+    return (row.buying ? "BUY  " : "SELL  ") + (row.name == null || row.name.isEmpty() ? "item " + row.itemId : row.name);
+  }
+
+  /** e.g. "4,000 / 11,000 at 243 gp - Buying". */
+  static String offerDetail(EviLivePlugin.OfferRow row) {
+    return String.format("%,d / %,d at %,d gp - %s", row.filled, row.total, row.price, offerStatus(row));
+  }
+
+  /** Short status text for a raw GrandExchangeOfferState name. */
+  static String offerStatus(EviLivePlugin.OfferRow row) {
+    switch (row.state == null ? "" : row.state) {
+      case "BUYING": return "Buying";
+      case "SELLING": return "Selling";
+      case "BOUGHT": return "Bought, collect";
+      case "SOLD": return "Sold, collect";
+      case "CANCELLED_BUY":
+      case "CANCELLED_SELL": return "Cancelled, collect";
+      default: return row.state == null ? "" : row.state;
+    }
+  }
+
+  /** Left accent: green once finished (ready to collect), red if cancelled, orange while still
+   *  trading -- RuneLite's own progress colors, so the state reads without the text. */
+  private static JPanel offerRow(EviLivePlugin.OfferRow row) {
+    String state = row.state == null ? "" : row.state;
+    Color accent = state.startsWith("CANCELLED") ? ColorScheme.PROGRESS_ERROR_COLOR
+      : ("BOUGHT".equals(state) || "SOLD".equals(state)) ? ColorScheme.PROGRESS_COMPLETE_COLOR
+      : ColorScheme.PROGRESS_INPROGRESS_COLOR;
+    JPanel card = new JPanel(new BorderLayout());
+    card.setAlignmentX(Component.LEFT_ALIGNMENT);
+    card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+    card.setBorder(new CompoundBorder(
+      BorderFactory.createMatteBorder(0, 3, 0, 0, accent),
+      BorderFactory.createEmptyBorder(4, 6, 4, 6)));
+    JLabel title = new JLabel(offerTitle(row));
+    title.setFont(FontManager.getRunescapeSmallFont());
+    title.setForeground(row.buying ? EviTheme.BRAND : ColorScheme.GRAND_EXCHANGE_PRICE);
+    JLabel detail = new JLabel(offerDetail(row));
+    detail.setFont(FontManager.getRunescapeSmallFont());
+    detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+    card.add(title, BorderLayout.NORTH);
+    card.add(detail, BorderLayout.SOUTH);
+    int height = card.getPreferredSize().height;
+    card.setMaximumSize(new Dimension(Integer.MAX_VALUE, height));
+    // A long item name would otherwise force the card wider than the sidebar and get clipped; with
+    // no minimum width the labels shrink to fit and Swing ends them with "...".
+    card.setMinimumSize(new Dimension(0, height));
+    return card;
   }
 
   /** A thin top rule with breathing room above/below it, used to visually separate the panel's

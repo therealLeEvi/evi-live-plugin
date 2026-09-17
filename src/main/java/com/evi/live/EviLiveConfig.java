@@ -30,13 +30,13 @@ public interface EviLiveConfig extends Config {
   }
 
   @ConfigItem(
-    keyName = "minProfitThreshold",
-    name = "Min predicted profit (gp)",
-    description = "Suggestions below this predicted profit (current buy/sell margin x suggested quantity) are skipped. 0 disables the filter.",
+    keyName = "minProfitTier",
+    name = "Min predicted profit",
+    description = "Suggestions below this predicted profit (current buy/sell margin x suggested quantity) are skipped. Auto applies no floor at all -- useful if you want EVI to also point out thin-margin, high-volume flips, which is exactly what a low-capital account often needs. Replaces the old free-form gp field; if you had that set, pick the closest tier here.",
     position = 3
   )
-  default int minProfitThreshold() {
-    return 0;
+  default MinProfitTier minProfitThreshold() {
+    return MinProfitTier.AUTO;
   }
 
   @ConfigItem(
@@ -86,6 +86,45 @@ public interface EviLiveConfig extends Config {
     position = 8
   )
   default boolean suggestIdleInventory() {
+    return false;
+  }
+
+  @ConfigItem(
+    keyName = "forecastHorizon",
+    name = "Price forecast for suggestions",
+    description = "Loads the OSRS Wiki's recent price history for EVI's suggested buy and runs the same momentum/volume forecast the scanner's own Predict button uses, over roughly this horizon, before showing the suggestion -- so a swing against you has a chance to be caught before you commit capital, not just after. Off by default: suggestions carry no forecast and cost no extra Wiki API call, exactly as before this setting existed. Never checked for a \"sell what you're already holding\" reminder -- there's no buy decision left to forecast there.",
+    position = 9
+  )
+  default ForecastHorizon forecastHorizon() {
+    return ForecastHorizon.OFF;
+  }
+
+  @ConfigItem(
+    keyName = "forecastPolicy",
+    name = "On an unfavorable forecast",
+    description = "Only checked when \"Price forecast for suggestions\" above isn't Off. Warn: keep the suggestion, with the forecast folded into its reasoning text so you can weigh it yourself. Skip: drop that candidate entirely and rank the next-best one instead, retrying a few times before falling back exactly as if forecasting were off.",
+    position = 10
+  )
+  default ForecastPolicy forecastPolicy() {
+    return ForecastPolicy.WARN;
+  }
+
+  // Off by default, under a NEW keyName. It originally shipped on by default under keyName
+  // "marginSafetyCushion", and RuneLite writes every default into the stored profile the first time
+  // the plugin loads -- so just flipping the default under the old key would have left anyone who'd
+  // already run that build stuck with a stored "true". Measured against live Wiki data, that check
+  // blocked every candidate (0 of 40 market-wide picks, 0 of 5 personal-history picks passed,
+  // including a real, high-volume thin-margin flip) and the bridge then returned no suggestion at
+  // all: its volatility estimate counts the ordinary bounce between an item's buy and sell prices
+  // (the very margin being flipped) as price movement, and scales it over a fixed 2-hour window.
+  // Stays opt-in until that measurement is redesigned -- see the 2026-09-17 README entry.
+  @ConfigItem(
+    keyName = "requireMarginAboveNoise",
+    name = "Require margin above price noise",
+    description = "EXPERIMENTAL -- currently far too strict: in testing against live prices it skipped almost every candidate, including stable high-volume flips, which can leave you with no suggestion at all. Before suggesting a buy, checks the item's own recent price history and skips it (trying the next-best pick instead) if the predicted margin is thinner than that specific item's measured short-term price wobble. Off by default until its measurement is recalibrated.",
+    position = 11
+  )
+  default boolean marginSafetyCushion() {
     return false;
   }
 

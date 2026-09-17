@@ -29,6 +29,14 @@ interface LocalTransport {
    */
   default int markPersonalUse(String key, String json) throws IOException { return 0; }
 
+  /**
+   * Tells the bridge the player no longer holds what a "you're holding this" suggestion refers to --
+   * used in-game, or sold while EVI wasn't watching (see Store.closePosition in bridge/store.mjs and
+   * EviLivePlugin.flagNotHeld). Same request/response shape and same "0 = not attempted" default as
+   * markPersonalUse above; whatever part of that purchase EVI did see sold still counts as profit.
+   */
+  default int markNotHeld(String key, String json) throws IOException { return 0; }
+
   /** Fixed destinations, no listener, redirects, system proxy or game commands. */
   final class Http implements LocalTransport {
     public int send(String key, String json) throws IOException {
@@ -36,6 +44,9 @@ interface LocalTransport {
     }
     public int markPersonalUse(String key, String json) throws IOException {
       return post("http://127.0.0.1:51743/api/suggestion/personal-use", key, json);
+    }
+    public int markNotHeld(String key, String json) throws IOException {
+      return post("http://127.0.0.1:51743/api/suggestion/not-held", key, json);
     }
     private int post(String url, String key, String json) throws IOException {
       HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);
