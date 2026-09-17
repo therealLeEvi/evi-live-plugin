@@ -17,10 +17,28 @@ interface LocalTransport {
    */
   String get(String key, String query) throws IOException;
 
+  /**
+   * Flags (or unflags) a specific, already-observed buy offer as personal use with the bridge --
+   * see Store.markPersonalUse in bridge/store.mjs and EviLivePlugin.flagPersonalUse. json is the
+   * full request body (e.g. {"buyId":"...","personal":true}), built by the caller the same way
+   * send()'s json is. Returns the response status; a caller that only cares "did this succeed"
+   * treats anything other than 200 as a no-op, since the session-local exclusion already applied
+   * regardless of whether this call lands. Default implementation returns 0 ("not attempted") so
+   * LocalTransport implementations written before this method existed (test fixtures) don't need
+   * updating -- only Http actually talks to the bridge.
+   */
+  default int markPersonalUse(String key, String json) throws IOException { return 0; }
+
   /** Fixed destinations, no listener, redirects, system proxy or game commands. */
   final class Http implements LocalTransport {
     public int send(String key, String json) throws IOException {
-      HttpURLConnection connection = (HttpURLConnection)new URL("http://127.0.0.1:51743/api/events").openConnection(Proxy.NO_PROXY);
+      return post("http://127.0.0.1:51743/api/events", key, json);
+    }
+    public int markPersonalUse(String key, String json) throws IOException {
+      return post("http://127.0.0.1:51743/api/suggestion/personal-use", key, json);
+    }
+    private int post(String url, String key, String json) throws IOException {
+      HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);
       try {
         connection.setInstanceFollowRedirects(false);
         connection.setConnectTimeout(1500);
