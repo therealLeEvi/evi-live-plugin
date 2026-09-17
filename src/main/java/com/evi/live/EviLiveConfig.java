@@ -79,4 +79,14 @@ public interface EviLiveConfig extends Config {
     return TradeDuration.NONE;
   }
 
+  @ConfigItem(
+    keyName = "suggestIdleInventory",
+    name = "Suggest selling idle inventory",
+    description = "When nothing else has a suggestion (no active hold, no profitable flip history), scan your current inventory for anything worth roughly 100k gp or more with no active GE offer, and suggest selling it -- even if EVI never saw you buy it (a drop, a quest reward, or anything acquired before this bridge started watching). Off by default: EVI's suggestions stay limited to things it actually observed you trade, as before.",
+    position = 8
+  )
+  default boolean suggestIdleInventory() {
+    return false;
+  }
+
 }
