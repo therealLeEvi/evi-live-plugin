@@ -2,10 +2,10 @@ package com.evi.live;
 
 import com.google.gson.Gson;
 import com.google.inject.Provides;
+import java.io.BufferedReader;
+import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +37,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.Filepath;
 import javax.swing.SwingUtilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,7 +61,7 @@ public class EviLivePlugin extends Plugin {
   @Inject private EviLiveConfig config;
   private EviLivePanel panel;
   private NavigationButton navigation;
-  private Path pairingPath;
+  private Filepath pairingPath;
   private volatile boolean running;
   private volatile long lifecycle;
   private long pairingRevision;
@@ -105,6 +107,32 @@ public class EviLivePlugin extends Plugin {
   // or it just isn't the current #1 suggestion, meant no hint/fill at all, even while buying or
   // selling it with a live GE price readily available).
   private volatile int openOfferItemId=-1;
+  // A snapshot of every item ID currently present (quantity > 0) in the player's inventory, read
+  // on the client thread every tick and cached here (volatile) for the background poll thread to
+  // read -- same pattern as cashStack/openOfferItemId above, and for the same reason: RuneLite's
+  // own Client API asserts that client.* calls happen on the client thread, and verifyPersistedHolding
+  // (see its own doc) is called from pollSuggestion() on the background `sender` executor, not from
+  // an event-subscriber callback. Calling client.getItemContainer() directly from there -- what an
+  // earlier version of this did -- threw "AssertionError: must be called on client thread" on every
+  // single poll once a persisted suggestion existed to verify, confirmed against a real client.log.
+  // Empty until the inventory has loaded this session, exactly like activeSlotItemIds. A genuinely
+  // empty inventory (everything banked) also produces an empty set, so verifyPersistedHolding
+  // distinguishes "never successfully refreshed yet" from "genuinely nothing held" via the
+  // separate inventorySnapshotEstablished flag below rather than via emptiness alone.
+  private volatile Set<Integer> inventoryItemIds=Collections.emptySet();
+  private volatile boolean inventorySnapshotEstablished=false;
+  // Companion to inventoryItemIds above, refreshed alongside it by the same
+  // refreshInventoryItemIds() call: total quantity per item ID currently in the inventory, summed
+  // across any unstacked duplicate slots (an inventory can hold the same item across more than one
+  // slot when it doesn't stack, e.g. noted vs. unnoted, or simply several separate non-stacking
+  // items sharing an ID in edge cases). Sent to the bridge as the inventory= query parameter (see
+  // suggestionQuery()), but only when EviLiveConfig.suggestIdleInventory() is turned on -- this is
+  // the one piece of session state here that leaves the client for a purpose beyond this plugin's
+  // own live hint/hotkey, so it stays opt-in rather than always collected and sent. Empty until the
+  // inventory has loaded, same "leave the previous snapshot in place on a hiccup" treatment as
+  // inventoryItemIds; a genuinely empty inventory also produces an empty map, which is fine here
+  // since an empty map simply means suggestionQuery() sends no inventory= parameter at all.
+  private volatile Map<Integer,Integer> inventoryQuantities=Collections.emptyMap();
   // Items bought and collected through the GE this session that haven't been resold yet -- so
   // EVI can remind you to close out a position you already opened (sell price shown again)
   // instead of moving straight on to a brand-new buy suggestion for something else, which was the
@@ -117,8 +145,11 @@ public class EviLivePlugin extends Plugin {
   // poll's background thread.
   private final Map<Integer,Held> heldForResale=new ConcurrentHashMap<>();
   static final class Held {
-    final int itemId,quantity;final String name;
-    Held(int itemId,int quantity,String name){this.itemId=itemId;this.quantity=quantity;this.name=name;}
+    // offerId: the specific buy offer this holding came from, when known -- carried through to the
+    // bridge as holdBuyId (see suggestionQuery()) so a "Personal use" flag on the resulting
+    // suggestion (see flagPersonalUse) marks that exact purchase, never just "this item ID" broadly.
+    final int itemId,quantity;final String name,offerId;
+    Held(int itemId,int quantity,String name,String offerId){this.itemId=itemId;this.quantity=quantity;this.name=name;this.offerId=offerId;}
   }
 
   @Provides
@@ -127,21 +158,29 @@ public class EviLivePlugin extends Plugin {
   }
 
   @Override protected void startUp() throws Exception {
-    Path dir=RuneLite.RUNELITE_DIR.toPath().resolve("evi-live");
-    Files.createDirectories(dir);
-    pairingPath=dir.resolve("plugin-key.txt");
+    // Rooted at the same .runelite/evi-live/ location this plugin has always used, via the
+    // Unchecked legacy-directory entry point rather than Plugin#getPluginDirectory() -- that
+    // sanctioned accessor doesn't exist in the RuneLite client yet (checked against the current
+    // master source; only Filepath itself has landed so far), so it can't be called today without
+    // failing to compile. Using Unchecked here keeps continuity with any pairing key / identity
+    // salt a user already has on disk, at the documented cost (see Filepath's own javadoc) that a
+    // plugin using Unchecked doesn't qualify for the Hub's fully-automatic review path. Worth
+    // flagging to the maintainer when this goes back up, in case getPluginDirectory() is close.
+    Filepath dir=Filepath.Unchecked.getLegacyPluginDirectory(RuneLite.RUNELITE_DIR.toPath(),"evi-live");
+    dir.createDirectories();
+    pairingPath=dir.joinSegment("plugin-key.txt");
     pluginKey=null;
     String pairingStatus="Not paired. Paste your RuneLite plugin key below.";
     try {
-      if(Files.exists(pairingPath))pluginKey=PairingKey.normalize(Files.readString(pairingPath,StandardCharsets.UTF_8));
+      if(pairingPath.exists())pluginKey=PairingKey.normalize(readTrimmed(pairingPath));
       if(pluginKey!=null)pairingStatus="Paired locally. Log in to begin observing offers.";
     } catch(Exception ex){pairingStatus="The saved pairing key is empty, invalid, or unreadable. Paste a new key below.";}
-    Path saltFile=dir.resolve("identity-salt.txt");
-    if(!Files.exists(saltFile))Files.writeString(saltFile,UUID.randomUUID().toString(),StandardCharsets.UTF_8);
-    salt=Files.readString(saltFile,StandardCharsets.UTF_8).trim();
+    Filepath saltFile=dir.joinSegment("identity-salt.txt");
+    if(!saltFile.exists())saltFile.write(UUID.randomUUID().toString());
+    salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion);
+      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse);
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
@@ -176,7 +215,7 @@ public class EviLivePlugin extends Plugin {
     try {
       final long generation=lifecycle;
       String key=PairingKey.normalize(entered);
-      Files.writeString(pairingPath,key,StandardCharsets.UTF_8);
+      pairingPath.write(key);
       clientThread.invokeLater(()->{
         if(!running || generation!=lifecycle)return;
         synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
@@ -186,7 +225,18 @@ public class EviLivePlugin extends Plugin {
     }catch(IllegalArgumentException ex){status(ex.getMessage());}
     catch(Exception ex){status("Could not save the key. Check write access to .runelite/evi-live.");}
   }
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();skippedItemIds.clear();cashStack=-1;openOfferItemId=-1;heldForResale.clear();}
+  // Filepath has no Files.readString()-equivalent single-call helper, so this reads the whole
+  // (small, single-line) file through its buffered UTF-8 Reader and trims it the same way the
+  // old Files.readString(...).trim() call did.
+  private static String readTrimmed(Filepath fp) throws IOException {
+    try(BufferedReader r=fp.openBufferedReader()) {
+      StringBuilder sb=new StringBuilder();
+      int c;
+      while((c=r.read())!=-1)sb.append((char)c);
+      return sb.toString().trim();
+    }
+  }
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();skippedItemIds.clear();cashStack=-1;openOfferItemId=-1;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -201,7 +251,7 @@ public class EviLivePlugin extends Plugin {
   private void updateHeldForResale(Offer old,Offer n) {
     if(old==null)return;
     if(buy(old.state) && !"EMPTY".equals(old.state) && "EMPTY".equals(n.state) && old.filled>0) {
-      heldForResale.put(old.itemId,new Held(old.itemId,old.filled,old.name));
+      heldForResale.put(old.itemId,new Held(old.itemId,old.filled,old.name,old.offerId));
     }
     if(!"EMPTY".equals(n.state) && !buy(n.state)) {
       heldForResale.remove(n.itemId);
@@ -217,6 +267,102 @@ public class EviLivePlugin extends Plugin {
       net.runelite.api.ItemContainer inv=client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
       cashStack=inv==null?-1:inv.count(995);
     } catch(Exception ex){cashStack=-1;}
+  }
+  // Refreshes inventoryItemIds (see its own field doc) from the inventory's contents every tick,
+  // same defensive try/catch pattern as refreshCashStack -- a lookup hiccup just leaves the
+  // snapshot at its last known value, or empty if there never was one. Deliberately NOT called
+  // from verifyPersistedHolding itself: that method runs on the background poll thread, and
+  // RuneLite's Client API must only ever be touched from the client thread (onGameTick runs there,
+  // which is why this -- like refreshCashStack -- is safe to call from there directly).
+  private void refreshInventoryItemIds() {
+    try {
+      net.runelite.api.ItemContainer inv=client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+      if(inv==null)return; // leave the previous snapshot (and inventorySnapshotEstablished) in place
+      Set<Integer> ids=new java.util.HashSet<>();
+      Map<Integer,Integer> quantities=new java.util.HashMap<>();
+      for(net.runelite.api.Item item:inv.getItems()) {
+        if(item==null || item.getId()<=0 || item.getQuantity()<=0)continue;
+        int resolvedId=resolveNotedItemId(item.getId());
+        ids.add(resolvedId);
+        quantities.merge(resolvedId,item.getQuantity(),Integer::sum);
+      }
+      inventoryItemIds=ids;
+      inventoryQuantities=quantities;
+      inventorySnapshotEstablished=true;
+    } catch(Exception ignored){} // leave the previous snapshot in place
+  }
+  // A noted item's own ItemContainer/Item.getId() is a DIFFERENT item ID from the unnoted item it
+  // represents -- confirmed against a real report (11 noted "Contract of glyphic attenuation" in
+  // inventory, "Suggest selling idle inventory" turned on, still no suggestion even though the
+  // item itself has healthy GE volume and a live price around 130k+ gp each). Both
+  // verifyPersistedHolding and computeInventorySuggestion (bridge-side, via the itemId this sends)
+  // need the UNNOTED id -- that's what the OSRS Wiki price API and /mapping endpoint are keyed by,
+  // not the note's own id -- so every id collected in refreshInventoryItemIds() is resolved through
+  // here first. Standard RuneLite idiom: an ItemComposition's getNote()==799 marks it as a note,
+  // and getLinkedNoteId() then gives the id of the unnoted item it represents. Falls back to the
+  // original id on any lookup failure, or when the item simply isn't noted to begin with (the
+  // overwhelmingly common case), so this is always safe to call unconditionally.
+  private int resolveNotedItemId(int itemId) {
+    try {
+      net.runelite.api.ItemComposition comp=client.getItemDefinition(itemId);
+      if(comp!=null && comp.getNote()==799)return comp.getLinkedNoteId();
+    } catch(Exception ignored){}
+    return itemId;
+  }
+  // Verifies a persistent-fallback "you're still holding this" suggestion (Suggestion.persisted,
+  // see its own doc) against the player's actual current inventory before trusting it. The
+  // bridge's own reconstruction of what's still held comes from journaled GE offers, not a live
+  // read of the game -- it can go stale (a position that, in reality, was fully resold through
+  // some combination of separate sale offers the automatic FIFO matcher didn't perfectly
+  // reconcile), and since the bridge only ever nominates its single earliest-bought candidate per
+  // poll, one stale entry can otherwise crowd out a real, currently-held item behind it forever.
+  // Called only for a `persisted` suggestion -- a live-observed one (this session's own
+  // buy-then-collect, see updateHeldForResale) is trusted as-is, exactly as before this existed.
+  //
+  // Reads inventoryItemIds (a client-thread-refreshed snapshot, see its own field doc) rather than
+  // calling client.getItemContainer() directly: this method is called from pollSuggestion(), which
+  // runs on the background `sender` executor, not an event-subscriber callback -- RuneLite's own
+  // Client API asserts that client.* access happens on the client thread, and an earlier version
+  // of this method that called it directly from here threw "AssertionError: must be called on
+  // client thread" on every single poll once a persisted suggestion existed to verify, confirmed
+  // against a real client.log. Deliberately fails open (treats the suggestion as verified) until
+  // inventoryItemIds has been successfully refreshed at least once this session
+  // (inventorySnapshotEstablished) -- distinct from the set simply being empty, since a genuinely
+  // empty inventory (everything banked) is a real, valid state that must still verify false for an
+  // item that isn't there. A hiccup or a not-yet-loaded inventory should never silently suppress a
+  // real reminder; a confirmed-empty one should. Checks the inventory only, not the bank -- an item
+  // collected straight to the bank rather than the inventory will not be recognised this way; a
+  // known, accepted limitation for now, not a bug (see README).
+  private boolean verifyPersistedHolding(Suggestion s) {
+    if(!inventorySnapshotEstablished)return true;
+    return inventoryItemIds.contains(s.itemId);
+  }
+  // Caps a "sell" suggestion's quantity down to what's actually sitting in the inventory right
+  // now, when that's less than what the bridge suggested -- confirmed against a real report: a
+  // partially-filled buy order (13 of 27 filled, then cancelled) left the journal correctly
+  // believing 13 were bought and never resold, but only 11 were actually still in the inventory
+  // (the other 2 presumably left some way the GE-only journal has no visibility into -- used for
+  // something in-game, banked and later withdrawn differently, etc.). verifyPersistedHolding above
+  // only checks that the item is present AT ALL, never that the remembered quantity still matches,
+  // so a stale-but-nonzero remaining count like this sailed straight through it. This applies to
+  // both a persisted (journal-reconstructed) and a live (this-session-observed) holding suggestion
+  // alike -- either one's remembered quantity can in principle drift from reality the same way, and
+  // there is no correctness reason to trust one path's number more than the other's here. Deliberately
+  // only ever reduces, never increases (a genuinely bigger inventory count than suggested says
+  // nothing wrong -- there could be older stock the suggestion isn't even about) and only overrides
+  // when inventorySnapshotEstablished, same fail-open-until-refreshed posture as
+  // verifyPersistedHolding, so a hiccup or not-yet-loaded inventory never wrongly zeroes out a real
+  // suggestion. Never touches a "buy" suggestion, where quantity means something entirely different
+  // (how many to acquire, not how many are already held).
+  private void correctSellQuantityAgainstInventory(Suggestion s) {
+    if(s==null || !"sell".equals(s.action) || !inventorySnapshotEstablished)return;
+    Integer held=inventoryQuantities.get(s.itemId);
+    int actualHeld=held==null?0:held;
+    if(actualHeld>0 && actualHeld<s.quantity) {
+      s.reasoning=(s.reasoning==null?"":s.reasoning+" ")+
+        "(Reduced from "+s.quantity+" to the "+actualHeld+" actually still in your inventory -- EVI's recorded quantity for this was stale.)";
+      s.quantity=actualHeld;
+    }
   }
   // Refreshes openOfferItemId (see its own field doc) from GEOffer every tick, same defensive
   // try/catch pattern as refreshCashStack -- a lookup hiccup just leaves it at "no slot open"
@@ -245,6 +391,7 @@ public class EviLivePlugin extends Plugin {
     try { suggestionHintWidget.update(); } catch (Exception ignored) { } // never let a widget hiccup break observation
     try { itemSelectWidget.update(); } catch (Exception ignored) { }
     refreshCashStack();
+    refreshInventoryItemIds();
     refreshOpenOfferItemId();
     String current=configManager.getRSProfileKey();
     if(current==null)return;
@@ -341,6 +488,19 @@ public class EviLivePlugin extends Plugin {
       if(json==null){updatePanelSuggestion(null,"Bridge unreachable -- check it's running and the pairing key matches.");return;}
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
+      // A reconstructed-from-history suggestion (see Suggestion.persisted) that isn't actually
+      // in the inventory right now is stale, not real -- treat it exactly like a manual "Skip
+      // this suggestion" click (excludes it for the rest of this session) and re-poll immediately
+      // instead of caching or showing it, so the bridge's next call naturally moves on to its
+      // next-earliest candidate rather than repeating the same wrong one every two seconds. Never
+      // touches suggestionCache/openItemPriceCache here, so whatever they already held (a prior
+      // valid suggestion, or nothing) is left exactly as it was until the retry resolves.
+      if(s!=null && s.persisted && !verifyPersistedHolding(s)) {
+        skippedItemIds.add(s.itemId);
+        if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
+        return;
+      }
+      correctSellQuantityAgainstInventory(s);
       suggestionCache.set(s);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
       updatePanelSuggestion(s,s==null?"No eligible reviewed flip is currently profitable.":null);
@@ -369,6 +529,38 @@ public class EviLivePlugin extends Plugin {
     updatePanelSuggestion(null,"Skipped. Checking for the next suggestion...");
     if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
+  // Called only from the sidebar's "Personal use" button (Swing EDT). For supplies bought via the
+  // GE for the player's own use rather than to flip -- e.g. buying cannonballs to actually fire
+  // them -- marks the specific buy behind the current "you're holding this, sell it" suggestion as
+  // personal use with the bridge (see Store.markPersonalUse in bridge/store.mjs), so that exact
+  // purchase stops being surfaced as something to sell and stops ever counting toward profit, even
+  // if it's later sold anyway. Only meaningful for a "sell" suggestion the bridge could trace back
+  // to one specific buy (Suggestion.buyId, see its own doc) -- a "buy" suggestion, or a holding
+  // signal with no identifiable single buy behind it, has nothing to mark, and the sidebar says so
+  // rather than silently doing nothing. This is deliberately scoped to THIS one purchase, not the
+  // item generally -- flipping this same item again later is unaffected; only unmarks if you
+  // explicitly ask (not exposed in the sidebar today, mirrors Store.markPersonalUse's own
+  // personal:false path for a future undo). The session-local exclusion (skippedItemIds, clearing
+  // any live heldForResale entry) applies immediately regardless of whether the bridge call itself
+  // succeeds, so the button feels responsive even against a slow or momentarily unreachable bridge;
+  // the actual POST runs on the background sender executor, never the Swing thread.
+  private void flagPersonalUse() {
+    Suggestion s=suggestionCache.get();
+    if(s==null)return;
+    if(!"sell".equals(s.action) || s.buyId==null || s.buyId.isEmpty()) {
+      if(panel!=null)panel.suggestion("Personal use only applies to a \"you're holding this\" suggestion EVI can trace back to one specific buy.");
+      return;
+    }
+    String key=pluginKey,buyId=s.buyId;
+    skippedItemIds.add(s.itemId);
+    heldForResale.remove(s.itemId);
+    suggestionCache.set(null);
+    updatePanelSuggestion(null,"Marked as personal use. Checking for the next suggestion...");
+    if(running && sender!=null)sender.execute(()->{
+      if(key!=null){try{transport.markPersonalUse(key,gson.toJson(new PersonalUseRequest(buyId)));}catch(Exception ignored){}}
+      pollSuggestion(lifecycle);
+    });
+  }
   // Built from this plugin's own local config plus live, session-only state (never from observed
   // content) and sent as the GET /api/suggestion query string. Each part is left off entirely
   // when it's at its default/empty, so an untouched config with nothing active or skipped sends
@@ -384,6 +576,12 @@ public class EviLivePlugin extends Plugin {
     if(config.includeMarketSuggestions()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
     TradeDuration duration=config.tradeDuration();
     if(duration!=null && duration.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(duration.minutes());}
+    // The same account identifier already sent with every ingest packet (see Packet.account),
+    // included here too once known (null only before the first login this process has seen) so the
+    // bridge can scope its own cross-restart open-position fallback to this account specifically --
+    // never mistakenly reminding you to sell stock that's actually held on a different account this
+    // same bridge happens to track. See pickPersistentOpenPosition in bridge/suggestions.mjs.
+    if(account!=null){if(q.length()>0)q.append('&');q.append("account=").append(account);}
     // Session-only, not a config setting: the player's actual current cash stack, so the bridge
     // never suggests a trade bigger than what's actually affordable right now. Left off entirely
     // when not yet known (cashStack==-1, e.g. the very first ticks after login), same treatment
@@ -414,11 +612,29 @@ public class EviLivePlugin extends Plugin {
       if(q.length()>0)q.append('&');
       q.append("holdItemId=").append(held.itemId).append("&holdQty=").append(held.quantity)
         .append("&holdName=").append(URLEncoder.encode(held.name,StandardCharsets.UTF_8));
+      // The specific buy offer this holding came from, when known (see Held's own doc) -- lets a
+      // "Personal use" flag on the resulting suggestion mark that exact purchase (see
+      // flagPersonalUse), not just "this item ID" broadly.
+      if(held.offerId!=null && !held.offerId.isEmpty())
+        q.append("&holdBuyId=").append(URLEncoder.encode(held.offerId,StandardCharsets.UTF_8));
     }
     // Session-only, not a config setting: the item currently selected in an open GE offer (see
     // openOfferItemId's own field doc), so the bridge can return a plain live-market price for it
     // via the response's separate openItemPrice field, regardless of flip history or ranking.
     if(openOfferItemId>0){if(q.length()>0)q.append('&');q.append("openItemId=").append(openOfferItemId);}
+    // Only when EviLiveConfig.suggestIdleInventory() is turned on AND there's something to send --
+    // the current inventory snapshot (inventoryQuantities, see its own field doc), so the bridge's
+    // last-resort fallback (computeInventorySuggestion in suggestions.mjs) can look for anything
+    // worth selling that EVI never observed a buy for at all. TreeMap here purely for a
+    // deterministic query string (same reasoning as the sorted `exclude` set above), not because
+    // ordering matters to the bridge.
+    if(config.suggestIdleInventory() && !inventoryQuantities.isEmpty()) {
+      Map<Integer,Integer> sorted=new TreeMap<>(inventoryQuantities);
+      if(q.length()>0)q.append('&');
+      q.append("includeInventory=1&inventory=");
+      boolean first=true;
+      for(Map.Entry<Integer,Integer> e:sorted.entrySet()){if(!first)q.append(',');q.append(e.getKey()).append(':').append(e.getValue());first=false;}
+    }
     return q.toString();
   }
   // Keeps only well-formed, non-negative integer item IDs from the free-text config field; silently
@@ -446,4 +662,8 @@ public class EviLivePlugin extends Plugin {
   static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;}
   static class Packet {int version=1;String session,account;long seq,ts;boolean loggedIn;List<Offer> offers=new ArrayList<>();}
   static class SuggestionResponse {Suggestion suggestion,openItemPrice;}
+  // Request body for POST /api/suggestion/personal-use (see flagPersonalUse and
+  // LocalTransport.markPersonalUse). personal defaults true -- this plugin only ever flags, never
+  // unflags, today; the field exists on the bridge side for a possible future undo.
+  static class PersonalUseRequest {String buyId;boolean personal=true;PersonalUseRequest(String buyId){this.buyId=buyId;}}
 }
