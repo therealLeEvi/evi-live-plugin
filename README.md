@@ -14,7 +14,15 @@ A passive Grand Exchange companion for **EVI**, a local, personal flip-tracking 
 
 This plugin is one half of EVI: the other half is a small local bridge (Node.js) and a browser-based scanner/dashboard that actually tracks your trade history, computes suggestions, and shows your profit over time. Both run entirely on your own computer — no data is sent to any server operated by anyone else. Without the bridge running and paired, this plugin has nothing to show.
 
-Setup and full source for the bridge and scanner: *(link to the main EVI Live project — add once published)*.
+**Full source for the bridge: https://github.com/therealLeEvi/evi-live-bridge** — it is a small
+Node.js server you run yourself. It listens on `127.0.0.1` only, keeps its records in a folder next
+to itself, and the only outbound requests it makes are to two public sources: the OSRS Wiki
+real-time price API and the official Old School RuneScape news feed. There is no account, no
+sign-up, and no server operated by anyone else. Its `LOCAL-API.md` documents every endpoint this
+plugin uses, and its README covers setup and exactly what is stored.
+
+The browser dashboard that reviews trades and charts profit over time is a separate, personal piece
+and is not published; the plugin and the bridge do not need it.
 
 ## Pairing
 
