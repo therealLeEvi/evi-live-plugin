@@ -21,12 +21,14 @@ public final class EviLivePanelTest {
     SwingUtilities.invokeAndWait(()->{
       AtomicReference<String> saved=new AtomicReference<>();
       java.util.concurrent.atomic.AtomicInteger skips=new java.util.concurrent.atomic.AtomicInteger();
-      EviLivePanel panel=new EviLivePanel(saved::set,skips::incrementAndGet);
+      java.util.concurrent.atomic.AtomicInteger personalUses=new java.util.concurrent.atomic.AtomicInteger();
+      EviLivePanel panel=new EviLivePanel(saved::set,skips::incrementAndGet,personalUses::incrementAndGet);
       List<Component> components=new ArrayList<>();visit(panel,components);
       JPasswordField field=(JPasswordField)components.stream().filter(x->x instanceof JPasswordField).findFirst().orElseThrow();
       List<JButton> buttons=components.stream().filter(x->x instanceof JButton).map(x->(JButton)x).collect(java.util.stream.Collectors.toList());
       JButton pairButton=buttons.stream().filter(b->"Save pairing key".equals(b.getText())).findFirst().orElseThrow();
       JButton skipButton=buttons.stream().filter(b->"Skip this suggestion".equals(b.getText())).findFirst().orElseThrow();
+      JButton personalUseButton=buttons.stream().filter(b->"Mark as personal use".equals(b.getText())).findFirst().orElseThrow();
       String synthetic="abcdef0123456789".repeat(4);
       field.setText(synthetic);pairButton.doClick();
       if(!synthetic.equals(saved.get()))throw new AssertionError("Pairing callback did not receive key");
@@ -35,7 +37,9 @@ public final class EviLivePanelTest {
       if(EviLivePanel.icon().getWidth()!=24)throw new AssertionError("Sidebar icon dimensions");
       skipButton.doClick();
       if(skips.get()!=1)throw new AssertionError("Skip callback must fire exactly once per click");
+      personalUseButton.doClick();
+      if(personalUses.get()!=1)throw new AssertionError("Personal-use callback must fire exactly once per click");
     });
-    System.out.println("PASS: sidebar pairing callback, masked key input and clearing after save, and the skip-suggestion button callback");
+    System.out.println("PASS: sidebar pairing callback, masked key input and clearing after save, the skip-suggestion button callback, and the personal-use button callback");
   }
 }
