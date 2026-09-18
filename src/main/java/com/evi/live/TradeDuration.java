@@ -28,7 +28,7 @@ public enum TradeDuration {
       case EIGHT_HOURS: return "~8 hours";
       case TWELVE_HOURS: return "~12 hours";
       case DAY: return "~24 hours";
-      default: return "No preference (default)";
+      default: return "No preference";
     }
   }
 

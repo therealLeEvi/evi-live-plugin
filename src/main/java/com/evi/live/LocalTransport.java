@@ -1,12 +1,15 @@
 package com.evi.live;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.Proxy;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+import okhttp3.CacheControl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 
 interface LocalTransport {
   int send(String key, String json) throws IOException;
@@ -37,8 +40,31 @@ interface LocalTransport {
    */
   default int markNotHeld(String key, String json) throws IOException { return 0; }
 
-  /** Fixed destinations, no listener, redirects, system proxy or game commands. */
+  /**
+   * Fixed destinations, no listener, redirects, system proxy or game commands.
+   *
+   * Built on RuneLite's own injected {@link OkHttpClient} rather than a client of its own, so every
+   * request this plugin makes goes through the client the user's RuneLite installation already
+   * governs -- its connection pool, dispatcher and interceptors. The only things adjusted here are
+   * the ones specific to talking to a bridge on this same machine: short timeouts (a loopback
+   * service either answers immediately or isn't running), no system proxy, and no redirects, so a
+   * request to 127.0.0.1 can never be talked into going anywhere else.
+   */
   final class Http implements LocalTransport {
+    private static final MediaType JSON = MediaType.parse("application/json");
+    private final OkHttpClient client;
+
+    Http(OkHttpClient shared) {
+      this.client = shared.newBuilder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)
+        .readTimeout(2000, TimeUnit.MILLISECONDS)
+        .writeTimeout(2000, TimeUnit.MILLISECONDS)
+        .proxy(Proxy.NO_PROXY)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build();
+    }
+
     public int send(String key, String json) throws IOException {
       return post("http://127.0.0.1:51743/api/events", key, json);
     }
@@ -49,33 +75,28 @@ interface LocalTransport {
       return post("http://127.0.0.1:51743/api/suggestion/not-held", key, json);
     }
     private int post(String url, String key, String json) throws IOException {
-      HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);
-      try {
-        connection.setInstanceFollowRedirects(false);
-        connection.setConnectTimeout(1500);
-        connection.setReadTimeout(2000);
-        connection.setRequestMethod("POST");
-        connection.setDoOutput(true);
-        connection.setRequestProperty("Content-Type", "application/json");
-        connection.setRequestProperty("Authorization", "Bearer " + key);
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        connection.setFixedLengthStreamingMode(bytes.length);
-        try(OutputStream stream = connection.getOutputStream()) { stream.write(bytes); }
-        return connection.getResponseCode();
-      } finally { connection.disconnect(); }
+      Request request = new Request.Builder()
+        .url(url)
+        .header("Authorization", "Bearer " + key)
+        .post(RequestBody.create(JSON, json))
+        .build();
+      try(Response response = client.newCall(request).execute()) { return response.code(); }
     }
     public String get(String key, String query) throws IOException {
       String url = "http://127.0.0.1:51743/api/suggestion" + (query == null || query.isEmpty() ? "" : "?" + query);
-      HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);
-      try {
-        connection.setInstanceFollowRedirects(false);
-        connection.setConnectTimeout(1500);
-        connection.setReadTimeout(2000);
-        connection.setRequestMethod("GET");
-        connection.setRequestProperty("Authorization", "Bearer " + key);
-        if (connection.getResponseCode() != 200) return null;
-        try(InputStream in = connection.getInputStream()) { return new String(in.readAllBytes(), StandardCharsets.UTF_8); }
-      } finally { connection.disconnect(); }
+      Request request = new Request.Builder()
+        .url(url)
+        .header("Authorization", "Bearer " + key)
+        // A suggestion is a live reading of the player's own journal and today's prices; serving a
+        // cached one from a shared client's cache would quietly show a stale trade.
+        .cacheControl(CacheControl.FORCE_NETWORK)
+        .get()
+        .build();
+      try(Response response = client.newCall(request).execute()) {
+        if (response.code() != 200) return null;
+        ResponseBody body = response.body();
+        return body == null ? null : body.string();
+      }
     }
   }
 }

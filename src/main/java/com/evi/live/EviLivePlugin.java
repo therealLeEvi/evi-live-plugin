@@ -66,7 +66,12 @@ public class EviLivePlugin extends Plugin {
   private long pairingRevision;
   @Inject private Gson gson;
   private final ArrayDeque<String> queue=new ArrayDeque<>();
-  private LocalTransport transport=new LocalTransport.Http();
+  // RuneLite's own shared HTTP client, injected rather than built here, so every request this
+  // plugin makes goes through the client the user's installation already governs. Assigned to
+  // transport in startUp() (not at field-initialisation time) because injection hasn't happened
+  // yet when fields are initialised; tests replace transport directly and never see this.
+  @Inject private okhttp3.OkHttpClient okHttpClient;
+  private LocalTransport transport;
   private ScheduledExecutorService sender;
   private volatile String pluginKey;
   private String salt,profile,account,session,economy;
@@ -101,6 +106,20 @@ public class EviLivePlugin extends Plugin {
   // refreshActiveSlotItemIds() and pushed to the panel from there, so the list follows GE changes
   // immediately rather than waiting for the next 2-second suggestion poll.
   private volatile List<OfferRow> geOfferRows=Collections.emptyList();
+  // How many of the 8 Grand Exchange slots are actually usable right now, recomputed alongside
+  // activeSlotItemIds (client-thread writes, poll-thread reads, hence volatile) and sent to the
+  // bridge as freeSlots=/collectable= so it never suggests a trade the player has nowhere to put.
+  // OSRS caps everyone at 8 simultaneous offers, and EVI previously had no idea: with all 8 in use
+  // it would happily keep suggesting a ninth, which is advice that cannot be followed.
+  //   freeSlots        -- slots that are genuinely EMPTY, i.e. a new offer can be placed at once.
+  //   collectableSlots -- slots holding a finished (bought/sold/cancelled) offer that has not been
+  //                       collected. These are full right now, but one click frees them, so they
+  //                       are counted separately rather than lumped in with "no room": the bridge
+  //                       still ranks normally when any exist and simply says to collect first.
+  // Both start at -1 ("not known yet", before the first slot snapshot) which sends nothing at all
+  // and filters nothing -- the same fail-open rule as cashStack and membersWorld above.
+  private volatile int freeSlots=-1;
+  private volatile int collectableSlots=-1;
   // The player's actual current cash stack, read from their own inventory's coins (item 995) on
   // the client thread every tick and cached here for the background poll thread to read (hence
   // volatile) -- never fabricated or assumed. -1 means "not yet known" (e.g. before the inventory
@@ -192,6 +211,9 @@ public class EviLivePlugin extends Plugin {
     // unchecked, ever"), and it is indeed present in the client this builds against. Nothing here
     // reads the old .runelite/evi-live/ folder any more: legacyDataDirectory is deliberately NOT set,
     // per the same review, since only this developer's own machine ever had that folder.
+    // Built here rather than at field initialisation because okHttpClient is only injected by the
+    // time startUp() runs. A test that installed its own transport keeps it.
+    if(transport==null)transport=new LocalTransport.Http(okHttpClient);
     Filepath dir=getPluginDirectory();
     dir.createDirectories();
     pairingPath=dir.joinSegment("plugin-key.txt");
@@ -230,7 +252,7 @@ public class EviLivePlugin extends Plugin {
     suggestionCache.set(null);
     openItemPriceCache.set(null);
     updatePanelSuggestion(null, null);
-    updatePanelOfferHint(Collections.emptyList(), null, null);
+    updatePanelOfferHint(Collections.emptyList(), null, null, null);
     try { suggestionHintWidget.clear(); } catch (Exception ignored) { }
     try { itemSelectWidget.clear(); } catch (Exception ignored) { }
     if(navigation!=null)toolbar.removeNavigation(navigation);
@@ -263,7 +285,7 @@ public class EviLivePlugin extends Plugin {
       return sb.toString().trim();
     }
   }
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -417,12 +439,21 @@ public class EviLivePlugin extends Plugin {
     Set<Integer> ids=new TreeSet<>();
     List<ActiveOffer> offers=new ArrayList<>();
     List<OfferRow> rows=new ArrayList<>();
+    int free=0,collectable=0;
+    // A null slot is one never observed this session (before the login capture fills all 8), not one
+    // seen to be empty. Counting it as free would be a fabricated reading, and counting it as busy
+    // would invent a constraint, so an incomplete snapshot reports nothing at all.
+    boolean established=true;
     for(Offer o:slots) {
-      if(o==null || "EMPTY".equals(o.state))continue;
+      if(o==null){established=false;continue;}
+      if("EMPTY".equals(o.state)){free++;continue;}
       ids.add(o.itemId);
-      if(!terminal(o))offers.add(new ActiveOffer(o.itemId,o.price,buy(o.state),o.name,Math.max(0,o.total-o.filled)));
+      if(terminal(o))collectable++;
+      else offers.add(new ActiveOffer(o.itemId,o.price,buy(o.state),o.name,Math.max(0,o.total-o.filled)));
       rows.add(new OfferRow(o.slot,o.itemId,o.price,o.filled,o.total,buy(o.state),o.name,o.state));
     }
+    freeSlots=established?free:-1;
+    collectableSlots=established?collectable:-1;
     activeSlotItemIds=ids;
     activeOffers=offers;
     geOfferRows=Collections.unmodifiableList(rows);
@@ -484,6 +515,20 @@ public class EviLivePlugin extends Plugin {
       !(terminal(old)&&!terminal(n));
     n.offerId=same?old.offerId:UUID.randomUUID().toString();
     n.knownStart=same?old.knownStart:(observing&&old!=null&&"EMPTY".equals(old.state)&&n.filled==0&&!"EMPTY".equals(n.state));
+    // How many game ticks passed between seeing this offer empty and its first fill. This is what
+    // separates a real trade from a "margin check" -- the one-item probe a flipper places at a
+    // deliberately bad price to discover the true spread, which fills almost instantly and is not a
+    // trade at all. Without it, a probe that buys high and sells low is journalled as a small losing
+    // flip and quietly drags down win rates, the fill model and EVI's own scorecard.
+    //
+    // startTick is only taken when the offer was actually seen unfilled (-1 otherwise, e.g. an offer
+    // already part-filled when first observed at login), so ticksToFill stays -1 = "not known"
+    // rather than a fabricated 0. Nothing downstream may classify an offer without this number.
+    int tick=-1;
+    try { tick=client.getTickCount(); } catch(Exception ignored) { }
+    n.startTick=same?old.startTick:(n.filled==0&&tick>=0?tick:-1);
+    n.ticksToFill=same?old.ticksToFill:-1;
+    if(n.ticksToFill<0 && n.filled>0 && n.startTick>=0 && tick>=n.startTick)n.ticksToFill=tick-n.startTick;
     return n;
   }
   private static boolean buy(String s){return s.equals("BUYING")||s.equals("BOUGHT")||s.equals("CANCELLED_BUY");}
@@ -553,8 +598,8 @@ public class EviLivePlugin extends Plugin {
       correctSellQuantityAgainstInventory(s);
       suggestionCache.set(s);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
-      updatePanelSuggestion(s,s==null?noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion()):null);
-      updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill);
+      updatePanelSuggestion(s,s==null?noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots):null);
+      updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice);
     } catch(Throwable ex){
       // Deliberately catches Throwable, not just Exception, and kept that way permanently: a
       // periodic ScheduledExecutorService task that lets ANY throwable escape -- including an
@@ -658,6 +703,14 @@ public class EviLivePlugin extends Plugin {
     RiskLevel risk=config.riskLevel();
     if(risk!=null && risk!=RiskLevel.MEDIUM){if(q.length()>0)q.append('&');q.append("risk=").append(risk.param());}
     if(config.includeMarketSuggestions()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
+    // How much of the cash stack one market-wide suggestion may commit (see MaxTradeShare for the
+    // backtest that produced the default). OFF is left off the query entirely, like every other
+    // setting here, so it behaves exactly as before this existed.
+    // Which market-wide candidates to consider at all (see TradingProfile); STANDARD sends nothing.
+    TradingProfile profile=config.tradingProfile();
+    if(profile!=null && profile.param()!=null){if(q.length()>0)q.append('&');q.append("profile=").append(profile.param());}
+    MaxTradeShare share=config.maxTradeShare();
+    if(share!=null && share.percent()>0){if(q.length()>0)q.append('&');q.append("stackShare=").append(share.percent());}
     TradeDuration duration=config.tradeDuration();
     if(duration!=null && duration.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(duration.minutes());}
     // Price-direction forecast for a "buy" suggestion (see ForecastHorizon/ForecastPolicy). Both
@@ -685,6 +738,14 @@ public class EviLivePlugin extends Plugin {
     // Left off entirely until known, exactly like cash= above.
     Boolean members=membersWorld;
     if(members!=null){if(q.length()>0)q.append('&');q.append("members=").append(members?1:0);}
+    // Session-only, not a config setting: how much room is left in the Grand Exchange (see the
+    // freeSlots/collectableSlots fields). With every one of the 8 slots occupied and nothing waiting
+    // to be collected, there is nowhere to put a new offer, so the bridge stops ranking new
+    // candidates and says so instead of suggesting a trade that cannot be placed. Left off entirely
+    // until known, exactly like cash= and members= above.
+    int free=freeSlots,collectable=collectableSlots;
+    if(free>=0){if(q.length()>0)q.append('&');q.append("freeSlots=").append(free);}
+    if(collectable>=0){if(q.length()>0)q.append('&');q.append("collectable=").append(collectable);}
     // Session-only, not a config setting: items to leave out of ranking right now because you
     // already have an active/uncollected GE slot for them (activeSlotItemIds, auto-detected) or
     // you manually skipped them via the sidebar (skippedItemIds). Merged and sorted here so the
@@ -782,6 +843,15 @@ public class EviLivePlugin extends Plugin {
   // (those were checked too), and silent about the margin-safety check, which in practice was the
   // thing skipping every candidate. Pure, so it's tested directly.
   static String noSuggestionMessage(boolean includeMarket, boolean cushion) {
+    return noSuggestionMessage(includeMarket,cushion,-1,-1);
+  }
+  // As above, plus what the Grand Exchange itself allows right now (see the freeSlots/collectableSlots
+  // fields). With all 8 slots occupied and nothing collectable, the bridge deliberately doesn't rank
+  // anything, so saying "nothing passes your settings" would be plainly wrong -- the settings were
+  // never consulted. Negative counts mean "not known yet" and change nothing.
+  static String noSuggestionMessage(boolean includeMarket, boolean cushion, int freeSlots, int collectableSlots) {
+    if(freeSlots==0 && collectableSlots==0)
+      return "All 8 Grand Exchange slots are in use, so there is nowhere to place another offer. EVI will suggest again as soon as one frees up.";
     String base=includeMarket
       ?"Nothing passes your settings right now -- neither your reviewed flips nor a market-wide pick."
       :"No eligible reviewed flip is currently profitable. (Market-wide suggestions are off.)";
@@ -859,10 +929,17 @@ public class EviLivePlugin extends Plugin {
   // apply to the same offer at once. A linear scan, not a map -- there are at most 8 GE slots, so
   // this is always trivially small. Never throws on a missing/short slotPrices/slotFill array;
   // simply skips any offer with no match.
-  private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill) {
+  private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice) {
     if(panel==null)return;
-    if(offers.isEmpty()){panel.offerHint(null);return;}
+    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.offerHint(null);return;}
     StringBuilder combined=new StringBuilder();
+    // Shown first: an offer that has been sitting is the thing most worth acting on, and the
+    // sentence already carries the market price and the break-even floor.
+    if(relistAdvice!=null)for(RelistAdvice advice:relistAdvice) {
+      if(advice==null || advice.message==null || advice.message.isEmpty())continue;
+      if(combined.length()>0)combined.append("\n\n");
+      combined.append(advice.message);
+    }
     for(ActiveOffer o:offers) {
       Suggestion price=null;
       if(slotPrices!=null)for(Suggestion p:slotPrices)if(p!=null && p.itemId==o.itemId){price=p;break;}
@@ -875,7 +952,10 @@ public class EviLivePlugin extends Plugin {
     }
     panel.offerHint(combined.length()>0?combined.toString():null);
   }
-  static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;}
+  static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;
+      // See capture(): ticks between first seeing this offer unfilled and its first fill, or -1 when
+      // not known. startTick is local bookkeeping and is not sent to the bridge.
+      transient int startTick=-1;int ticksToFill=-1;}
   static class Packet {int version=1;String session,account;long seq,ts;boolean loggedIn;List<Offer> offers=new ArrayList<>();}
   // Immutable per-offer snapshot for the sidebar's cancel/relist hint (offerDriftHint) -- separate
   // from Offer itself because an Offer instance is wholesale-replaced by capture() on every change
@@ -897,7 +977,12 @@ public class EviLivePlugin extends Plugin {
   // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
   // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
   // get matched back up against activeOffers by itemId.
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;}
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;}
+  // One entry per sell offer that has been sitting long enough to be worth mentioning, built by the
+  // bridge from its own journal (see bridge/relist.mjs). `message` is already a complete, hedged
+  // sentence naming the market price and, when the cost basis is known, the break-even price; the
+  // plugin only displays it. Nothing here relists, cancels or edits anything -- the player does.
+  static final class RelistAdvice {int itemId;String name,message;boolean belowBreakEven;}
   // One entry per in-progress offer the bridge could judge against the player's own "Target trade
   // duration" setting -- see estimateOfferFill in suggestions.mjs for exactly what this is (a rough
   // volume-based estimate from the OSRS Wiki API's own last-hour trading data, never a fill

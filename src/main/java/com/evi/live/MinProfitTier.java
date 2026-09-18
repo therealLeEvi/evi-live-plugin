@@ -15,12 +15,12 @@ public enum MinProfitTier {
   /** RuneLite's config UI renders enum dropdowns using toString(), so this is the visible label. */
   @Override public String toString() {
     switch (this) {
-      case T100K: return "100k+ gp";
-      case T200K: return "200k+ gp";
-      case T500K: return "500k+ gp";
-      case T1M: return "1m+ gp";
-      case T2M: return "2m+ gp";
-      default: return "Auto (any profit, including thin-margin flips)";
+      case T100K: return "100k+";
+      case T200K: return "200k+";
+      case T500K: return "500k+";
+      case T1M: return "1m+";
+      case T2M: return "2m+";
+      default: return "Auto";
     }
   }
 

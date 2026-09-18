@@ -19,8 +19,8 @@ public enum ForecastHorizon {
     switch (this) {
       case ONE_HOUR: return "~1 hour";
       case SIX_HOUR: return "~6 hours";
-      case OVERNIGHT: return "Overnight (~12+ hours)";
-      default: return "Off (default)";
+      case OVERNIGHT: return "Overnight";
+      default: return "Off";
     }
   }
 

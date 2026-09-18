@@ -70,6 +70,26 @@ public interface EviLiveConfig extends Config {
   }
 
   @ConfigItem(
+    keyName = "tradingProfile",
+    name = "Trading profile",
+    description = "Starter restricts market-wide suggestions to items the Grand Exchange charges no tax on -- cheap, heavily traded things that sell quickly. Backtested over 90 days on a 2m stack it completed 325 trades instead of 220, won 98% instead of 85%, and left 5% of capital stuck instead of 29%, with a far smaller worst case. Each trade earns less, so this is a way to learn the mechanics and grow steadily rather than to make a fortune quickly. Standard searches the whole catalogue. Either way, suggestions from your own flip history are unaffected.",
+    position = 6
+  )
+  default TradingProfile tradingProfile() {
+    return TradingProfile.STARTER;
+  }
+
+  @ConfigItem(
+    keyName = "maxTradeShare",
+    name = "Max share of cash per trade",
+    description = "Limits how much of your cash stack one market-wide suggestion may commit, so a single slow-selling item can't tie up everything you have. Replaying 90 days of real prices through EVI's own ranking, uncapped market-wide suggestions lost around 93m gp -- almost entirely from expensive items bought with nearly the whole stack and still unsold a day later -- while capping each trade at a quarter of the stack turned the same 90 days positive, with no fewer suggestions. It never withholds a suggestion; it only makes it smaller, and says so. Applies to market-wide picks only: suggestions from your own flip history keep the size your own trading history implies. Set to No limit for the old behaviour.",
+    position = 7
+  )
+  default MaxTradeShare maxTradeShare() {
+    return MaxTradeShare.QUARTER;
+  }
+
+  @ConfigItem(
     keyName = "tradeDuration",
     name = "Target trade duration",
     description = "Prefer trades that can realistically complete within about this long, estimated from the OSRS Wiki price API's own recent trading-volume data for each item -- not a guarantee, just a rough sanity check. A candidate too slow-moving even for one unit within this window is skipped; one that's only realistic at a smaller quantity gets sized down instead. No preference (the default) leaves suggestions exactly as before this setting existed.",

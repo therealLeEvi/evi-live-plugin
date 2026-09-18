@@ -81,13 +81,13 @@ public final class EviLiveDeliveryTest {
     // explicit marginSafetyCushion(){return false;} overrides in the tests below predate that and
     // are now redundant, but still pin those tests to "cushion off" whatever the default becomes.
     EviLivePlugin defaults=new EviLivePlugin();
-    set(defaults,"config",new EviLiveConfig(){});
-    check("".equals(suggestionQuery.invoke(defaults)),"An untouched config must send an empty query -- marginSafetyCushion is off by default");
+    set(defaults,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}});
+    check("".equals(suggestionQuery.invoke(defaults)),"With the trade-size cap turned off, an otherwise-untouched config must send an empty query");
     Method cushionItem=EviLiveConfig.class.getDeclaredMethod("marginSafetyCushion");
     check("requireMarginAboveNoise".equals(cushionItem.getAnnotation(net.runelite.client.config.ConfigItem.class).keyName()),"marginSafetyCushion must use its new keyName, so a 'true' RuneLite stored under the old on-by-default key is not picked up");
 
     EviLivePlugin tuned=new EviLivePlugin();
-    set(tuned,"config",new EviLiveConfig(){
+    set(tuned,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T500K;}
       public boolean marginSafetyCushion(){return false;}
       public String itemBlocklist(){return "4151, 995";}
@@ -101,35 +101,35 @@ public final class EviLiveDeliveryTest {
     // "any profit, no floor" -- must behave exactly like the old default of 0 (left off the query
     // entirely), and each tier must send its own documented gp figure.
     EviLivePlugin autoTier=new EviLivePlugin();
-    set(autoTier,"config",new EviLiveConfig(){
+    set(autoTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.AUTO;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(autoTier)),"AUTO (the default tier) must be left off the query entirely, same as the old free-form field's 0");
 
     EviLivePlugin t100k=new EviLivePlugin();
-    set(t100k,"config",new EviLiveConfig(){
+    set(t100k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T100K;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=100000".equals(suggestionQuery.invoke(t100k)),"T100K alone, with no leading '&', when it's the only tuned setting");
 
     EviLivePlugin t200k=new EviLivePlugin();
-    set(t200k,"config",new EviLiveConfig(){
+    set(t200k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T200K;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=200000".equals(suggestionQuery.invoke(t200k)),"T200K's gp figure");
 
     EviLivePlugin t1m=new EviLivePlugin();
-    set(t1m,"config",new EviLiveConfig(){
+    set(t1m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T1M;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=1000000".equals(suggestionQuery.invoke(t1m)),"T1M's gp figure");
 
     EviLivePlugin t2m=new EviLivePlugin();
-    set(t2m,"config",new EviLiveConfig(){
+    set(t2m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T2M;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -139,27 +139,27 @@ public final class EviLiveDeliveryTest {
     // must leave the query exactly as before this setting existed, and turning it on must combine
     // with a profit tier in the documented order (minProfit=, then cushion=1, then everything else).
     EviLivePlugin cushionExplicitOff=new EviLivePlugin();
-    set(cushionExplicitOff,"config",new EviLiveConfig(){
+    set(cushionExplicitOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(cushionExplicitOff)),"Explicit marginSafetyCushion=false must be left off the query, matching pre-existing behaviour");
 
     EviLivePlugin cushionWithTier=new EviLivePlugin();
-    set(cushionWithTier,"config",new EviLiveConfig(){
+    set(cushionWithTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T500K;}
       public boolean marginSafetyCushion(){return true;}
     });
     check("minProfit=500000&cushion=1".equals(suggestionQuery.invoke(cushionWithTier)),"A profit tier plus an opted-in cushion must both appear, minProfit= before cushion=1");
 
     EviLivePlugin noDurationPreference=new EviLivePlugin();
-    set(noDurationPreference,"config",new EviLiveConfig(){
+    set(noDurationPreference,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public TradeDuration tradeDuration(){return TradeDuration.NONE;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(noDurationPreference)),"Explicit NONE (no preference) must be left off the query, matching the default");
 
     EviLivePlugin durationOnly=new EviLivePlugin();
-    set(durationOnly,"config",new EviLiveConfig(){
+    set(durationOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public TradeDuration tradeDuration(){return TradeDuration.SIXTY;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -168,13 +168,44 @@ public final class EviLiveDeliveryTest {
     for(int i=0;i<longOptions.length;i++){
       final TradeDuration d=longOptions[i];
       EviLivePlugin longTrade=new EviLivePlugin();
-      set(longTrade,"config",new EviLiveConfig(){public TradeDuration tradeDuration(){return d;}});
+      set(longTrade,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}public TradeDuration tradeDuration(){return d;}});
       check(("duration="+longMinutes[i]).equals(suggestionQuery.invoke(longTrade)),"Hour-plus trade durations must send their minutes: "+d);
+    }
+    // tradingProfile: STANDARD (the default) sends nothing; STARTER restricts market-wide picks to
+    // untaxed items. See TradingProfile's own doc for the backtest behind it.
+    EviLivePlugin starter=new EviLivePlugin();
+    set(starter,"config",new EviLiveConfig(){
+      public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
+      public TradingProfile tradingProfile(){return TradingProfile.STARTER;}
+    });
+    check("profile=starter".equals(suggestionQuery.invoke(starter)),"The Starter profile must be sent as profile=starter");
+    EviLivePlugin standard=new EviLivePlugin();
+    set(standard,"config",new EviLiveConfig(){
+      public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
+      public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+    });
+    check("".equals(suggestionQuery.invoke(standard)),"Standard must be left off the query entirely");
+    // maxTradeShare: on by default at 25% (see MaxTradeShare's own doc for the backtest), so an
+    // untouched config sends stackShare=25; No limit restores the old, uncapped sizing.
+    EviLivePlugin shareDefault=new EviLivePlugin();
+    set(shareDefault,"config",new EviLiveConfig(){});
+    check("profile=starter&stackShare=25".equals(suggestionQuery.invoke(shareDefault)),"An untouched config must send the Starter profile and cap one trade at 25% of the cash stack");
+    EviLivePlugin shareOff=new EviLivePlugin();
+    set(shareOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}});
+    check("".equals(suggestionQuery.invoke(shareOff)),"No limit must be left off the query entirely");
+    for(MaxTradeShare s:new MaxTradeShare[]{MaxTradeShare.TENTH,MaxTradeShare.THIRD,MaxTradeShare.HALF}){
+      final MaxTradeShare chosen=s;
+      EviLivePlugin p=new EviLivePlugin();
+      set(p,"config",new EviLiveConfig(){
+        public MaxTradeShare maxTradeShare(){return chosen;}
+        public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      });
+      check(("stackShare="+chosen.percent()).equals(suggestionQuery.invoke(p)),"Each share option must send its own percentage: "+chosen);
     }
     // members=: which kind of world the player is on, so the bridge never suggests a members-only
     // item on a free-to-play world. Unknown (not yet logged in) must send nothing at all.
     EviLivePlugin worldPlugin=new EviLivePlugin();
-    set(worldPlugin,"config",new EviLiveConfig(){});
+    set(worldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}});
     check("".equals(suggestionQuery.invoke(worldPlugin)),"An unknown world type must not send members= at all");
     set(worldPlugin,"membersWorld",Boolean.TRUE);
     check("members=1".equals(suggestionQuery.invoke(worldPlugin)),"A members world must send members=1");
@@ -193,21 +224,21 @@ public final class EviLiveDeliveryTest {
     check(!profitableSell.sellsAtLoss(),"A profitable sell with a known break-even is not a loss");
 
     EviLivePlugin mediumRisk=new EviLivePlugin();
-    set(mediumRisk,"config",new EviLiveConfig(){
+    set(mediumRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public RiskLevel riskLevel(){return RiskLevel.MEDIUM;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(mediumRisk)),"Explicit medium risk must be left off the query, matching the bridge's own default");
 
     EviLivePlugin marketOnly=new EviLivePlugin();
-    set(marketOnly,"config",new EviLiveConfig(){
+    set(marketOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean includeMarketSuggestions(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("includeMarket=1".equals(suggestionQuery.invoke(marketOnly)),"includeMarket=1 alone, with no leading '&', when it's the only tuned setting");
 
     EviLivePlugin marketOff=new EviLivePlugin();
-    set(marketOff,"config",new EviLiveConfig(){
+    set(marketOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean includeMarketSuggestions(){return false;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -218,7 +249,7 @@ public final class EviLiveDeliveryTest {
     // horizon always sends its policy too, even the default (warn), since the bridge's own default
     // for an unset onForecast is also warn and this keeps the query string self-explanatory either way.
     EviLivePlugin forecastOff=new EviLivePlugin();
-    set(forecastOff,"config",new EviLiveConfig(){
+    set(forecastOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.OFF;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
       public boolean marginSafetyCushion(){return false;}
@@ -226,21 +257,21 @@ public final class EviLiveDeliveryTest {
     check("".equals(suggestionQuery.invoke(forecastOff)),"Explicit forecastHorizon=OFF must be left off the query even with a non-default policy, matching the default");
 
     EviLivePlugin forecastOneHour=new EviLivePlugin();
-    set(forecastOneHour,"config",new EviLiveConfig(){
+    set(forecastOneHour,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.ONE_HOUR;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("forecast=1h&onForecast=warn".equals(suggestionQuery.invoke(forecastOneHour)),"An enabled horizon must always send its policy too, even when the policy itself is left at its default (warn)");
 
     EviLivePlugin forecastSixHour=new EviLivePlugin();
-    set(forecastSixHour,"config",new EviLiveConfig(){
+    set(forecastSixHour,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.SIX_HOUR;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("forecast=6h&onForecast=warn".equals(suggestionQuery.invoke(forecastSixHour)),"6h horizon param value");
 
     EviLivePlugin forecastOvernightSkip=new EviLivePlugin();
-    set(forecastOvernightSkip,"config",new EviLiveConfig(){
+    set(forecastOvernightSkip,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.OVERNIGHT;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
       public boolean marginSafetyCushion(){return false;}
@@ -248,7 +279,7 @@ public final class EviLiveDeliveryTest {
     check("forecast=overnight&onForecast=skip".equals(suggestionQuery.invoke(forecastOvernightSkip)),"Overnight horizon with skip policy");
 
     EviLivePlugin forecastWithDuration=new EviLivePlugin();
-    set(forecastWithDuration,"config",new EviLiveConfig(){
+    set(forecastWithDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public TradeDuration tradeDuration(){return TradeDuration.THIRTY;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.OVERNIGHT;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
@@ -263,21 +294,21 @@ public final class EviLiveDeliveryTest {
     Map<Integer,Integer> snapshot=new java.util.HashMap<>();
     snapshot.put(30810,11);snapshot.put(995,50000000);snapshot.put(4151,1);
     EviLivePlugin inventoryOff=new EviLivePlugin();
-    set(inventoryOff,"config",new EviLiveConfig(){
+    set(inventoryOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(inventoryOff,"inventoryQuantities",snapshot);
     check("".equals(suggestionQuery.invoke(inventoryOff)),"suggestIdleInventory defaults to off, so a populated inventory snapshot must still be left off the query");
 
     EviLivePlugin inventoryOnEmpty=new EviLivePlugin();
-    set(inventoryOnEmpty,"config",new EviLiveConfig(){
+    set(inventoryOnEmpty,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(inventoryOnEmpty)),"suggestIdleInventory=true with an empty inventory snapshot (the default) must still produce an empty query");
 
     EviLivePlugin inventoryOn=new EviLivePlugin();
-    set(inventoryOn,"config",new EviLiveConfig(){
+    set(inventoryOn,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -289,7 +320,7 @@ public final class EviLiveDeliveryTest {
     // default), and included once known so the bridge can scope its cross-restart open-position
     // fallback (pickPersistentOpenPosition, bridge/suggestions.mjs) to this account specifically.
     EviLivePlugin accountPlugin=new EviLivePlugin();
-    set(accountPlugin,"config",new EviLiveConfig(){
+    set(accountPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(accountPlugin)),"No account known yet (null, the default) must be left off the query entirely");
@@ -303,7 +334,7 @@ public final class EviLiveDeliveryTest {
     // run), and included as a plain integer once known, so a real reading of 0 gp (dead broke)
     // still reaches the bridge rather than being treated the same as "unknown".
     EviLivePlugin cashPlugin=new EviLivePlugin();
-    set(cashPlugin,"config",new EviLiveConfig(){
+    set(cashPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(cashPlugin)),"Unknown cash stack (-1, the default) must be left off the query entirely");
@@ -319,7 +350,7 @@ public final class EviLiveDeliveryTest {
     // is open (-1, the default), and included as openItemId once known, so the bridge can return a
     // plain live-market price for it regardless of flip history or ranking.
     EviLivePlugin openItemPlugin=new EviLivePlugin();
-    set(openItemPlugin,"config",new EviLiveConfig(){
+    set(openItemPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(openItemPlugin)),"No GE slot open (-1, the default) must be left off the query entirely");
@@ -334,7 +365,7 @@ public final class EviLiveDeliveryTest {
     Method updateHeld=EviLivePlugin.class.getDeclaredMethod("updateHeldForResale",EviLivePlugin.Offer.class,EviLivePlugin.Offer.class);
     updateHeld.setAccessible(true);
     EviLivePlugin holdPlugin=new EviLivePlugin();
-    set(holdPlugin,"config",new EviLiveConfig(){
+    set(holdPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(holdPlugin)),"Nothing held yet: the query must be unaffected");
@@ -403,7 +434,7 @@ public final class EviLiveDeliveryTest {
     // setting, so an untouched config with nothing active or skipped still sends an empty query.
     Method refresh=EviLivePlugin.class.getDeclaredMethod("refreshActiveSlotItemIds");refresh.setAccessible(true);
     EviLivePlugin excludePlugin=new EviLivePlugin();
-    set(excludePlugin,"config",new EviLiveConfig(){
+    set(excludePlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     EviLivePlugin.Offer[] exSlots=(EviLivePlugin.Offer[])get(excludePlugin,"slots");
@@ -452,6 +483,36 @@ public final class EviLiveDeliveryTest {
     check(EviLivePlugin.noSuggestionMessage(false,false).startsWith("No eligible reviewed flip"),"Market-wide off keeps the reviewed-flip wording");
     check(EviLivePlugin.noSuggestionMessage(true,false).contains("market-wide") && !EviLivePlugin.noSuggestionMessage(true,false).contains("price noise"),"Market-wide on must say market-wide picks were checked too");
     check(EviLivePlugin.noSuggestionMessage(true,true).contains("Require margin above price noise"),"With the margin check on, the message must name it");
+    // Slot capacity: OSRS allows 8 offers at once, so with all 8 occupied and nothing collectable
+    // the bridge never ranks anything -- saying "nothing passes your settings" would be plainly
+    // wrong, since the settings were never consulted.
+    check(EviLivePlugin.noSuggestionMessage(true,false,0,0).contains("All 8 Grand Exchange slots are in use"),"With every slot occupied and nothing collectable, the message must say so instead of blaming the settings");
+    check(!EviLivePlugin.noSuggestionMessage(true,true,0,0).contains("Require margin above price noise"),"A full Grand Exchange must not also blame the margin check, which never ran");
+    check(EviLivePlugin.noSuggestionMessage(true,false,0,2).contains("market-wide"),"With finished offers waiting to be collected, ranking did happen, so the ordinary wording stands");
+    check(EviLivePlugin.noSuggestionMessage(true,false,-1,-1).equals(EviLivePlugin.noSuggestionMessage(true,false)),"An unknown slot count must change nothing");
+    check(EviLivePlugin.noSuggestionMessage(true,false,1,0).contains("market-wide"),"A free slot must change nothing");
+
+    // freeSlots=/collectable=: counted from the 8 real slots and sent only once every one of them
+    // has actually been observed this session.
+    EviLivePlugin slotPlugin=new EviLivePlugin();
+    set(slotPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    EviLivePlugin.Offer[] capacitySlots=(EviLivePlugin.Offer[])get(slotPlugin,"slots");
+    for(int i=0;i<8;i++){capacitySlots[i]=new EviLivePlugin.Offer();capacitySlots[i].state="SELLING";capacitySlots[i].itemId=100+i;capacitySlots[i].total=10;capacitySlots[i].filled=0;}
+    refresh.invoke(slotPlugin);
+    check(((String)suggestionQuery.invoke(slotPlugin)).contains("freeSlots=0&collectable=0"),"Eight in-progress offers must report a full Grand Exchange with nothing to collect");
+    capacitySlots[3].state="SOLD";capacitySlots[3].total=10;capacitySlots[3].filled=10;
+    refresh.invoke(slotPlugin);
+    check(((String)suggestionQuery.invoke(slotPlugin)).contains("freeSlots=0&collectable=1"),"A finished, uncollected offer still occupies its slot but is counted separately");
+    capacitySlots[3].state="EMPTY";capacitySlots[3].itemId=0;capacitySlots[3].total=0;capacitySlots[3].filled=0;
+    refresh.invoke(slotPlugin);
+    check(((String)suggestionQuery.invoke(slotPlugin)).contains("freeSlots=1&collectable=0"),"Collecting frees the slot again, with no separate bookkeeping");
+    capacitySlots[5]=null; // a slot never observed this session
+    refresh.invoke(slotPlugin);
+    check(!((String)suggestionQuery.invoke(slotPlugin)).contains("freeSlots="),"An incomplete slot snapshot must send no count at all rather than a fabricated one");
+    resetMethod.invoke(slotPlugin);
+    check("".equals(suggestionQuery.invoke(slotPlugin)),"reset() (logout/world hop) must forget the slot counts entirely");
 
     // offerDriftHint: pure, so tested directly rather than through a full poll round-trip.
     Method driftHint=EviLivePlugin.class.getDeclaredMethod("offerDriftHint",EviLivePlugin.ActiveOffer.class,Suggestion.class);
@@ -642,7 +703,7 @@ public final class EviLiveDeliveryTest {
     Method poll=EviLivePlugin.class.getDeclaredMethod("pollSuggestion",long.class);poll.setAccessible(true);
     EviLivePlugin pollPlugin=new EviLivePlugin();
     set(pollPlugin,"gson",new Gson());
-    set(pollPlugin,"config",new EviLiveConfig(){ // suggestionQuery() (called at the top of every real pollSuggestion()) needs this
+    set(pollPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;} // suggestionQuery() (called at the top of every real pollSuggestion()) needs this
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin,"running",true);set(pollPlugin,"lifecycle",1L);
@@ -665,7 +726,7 @@ public final class EviLiveDeliveryTest {
     // normally, exactly as an unpersisted (live-observed) suggestion always has been.
     EviLivePlugin pollPlugin2=new EviLivePlugin();
     set(pollPlugin2,"gson",new Gson());
-    set(pollPlugin2,"config",new EviLiveConfig(){
+    set(pollPlugin2,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin2,"running",true);set(pollPlugin2,"lifecycle",1L);
@@ -693,7 +754,7 @@ public final class EviLiveDeliveryTest {
     // remaining count). Must come through corrected, not as the bridge originally sent it.
     EviLivePlugin pollPlugin3=new EviLivePlugin();
     set(pollPlugin3,"gson",new Gson());
-    set(pollPlugin3,"config",new EviLiveConfig(){
+    set(pollPlugin3,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin3,"running",true);set(pollPlugin3,"lifecycle",1L);
