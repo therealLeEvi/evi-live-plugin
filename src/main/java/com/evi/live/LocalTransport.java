@@ -2,6 +2,7 @@ package com.evi.live;
 
 import java.io.IOException;
 import java.net.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import okhttp3.CacheControl;
 import okhttp3.MediaType;
@@ -75,10 +76,15 @@ interface LocalTransport {
       return post("http://127.0.0.1:51743/api/suggestion/not-held", key, json);
     }
     private int post(String url, String key, String json) throws IOException {
+      // Deliberately the byte[] overload, not the String one. RequestBody.create(MediaType, String)
+      // rewrites the type to "application/json; charset=utf-8", which a bridge that checks the
+      // header for an exact "application/json" rejects with HTTP 400 -- observed against a real
+      // client the first time this class used OkHttp. Encoding the UTF-8 bytes here sends the bare
+      // type, so a plugin update can never break against a bridge the player hasn't updated yet.
       Request request = new Request.Builder()
         .url(url)
         .header("Authorization", "Bearer " + key)
-        .post(RequestBody.create(JSON, json))
+        .post(RequestBody.create(JSON, json.getBytes(StandardCharsets.UTF_8)))
         .build();
       try(Response response = client.newCall(request).execute()) { return response.code(); }
     }
