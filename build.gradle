@@ -3,21 +3,26 @@ repositories {
     maven { url = 'https://repo.runelite.net'; content { includeGroupByRegex('net\\.runelite.*') } }
     mavenCentral()
 }
-// 1.12.38 predates net.runelite.client.util.Filepath (added 2026-09-15) and failed to compile;
-// '+' was used once to discover the newest published build, which resolved to this SNAPSHOT --
-// there is not yet a stable (non-SNAPSHOT) release containing Filepath. Pinned to the exact
-// string rather than left as '+', so the build no longer silently drifts to whatever's newest
-// each time. Worth revisiting once a real, non-SNAPSHOT release ships with Filepath in it --
-// SNAPSHOT artifacts are mutable (repo.runelite.net can republish the same version string with
-// different bytes) and aren't a great long-term pin for something going through Hub review.
-def runeLiteVersion = '1.12.40-SNAPSHOT'
+// Pinned to the official 1.12.39 release. 1.12.38 predates net.runelite.client.util.Filepath and
+// Plugin#getPluginDirectory() and failed to compile, so this was previously pinned to
+// 1.12.40-SNAPSHOT, when no release had them. 1.12.39 does (checked in the release jar itself on
+// 2026-09-18), so the build moved to it, for two reasons:
+//   * `gradlew run` launches a client that identifies as whatever version this is, and the Plugin
+//     Hub only publishes manifests for real releases -- manifest/1.12.39_full.js exists,
+//     manifest/1.12.40-SNAPSHOT_full.js is a 404. On the snapshot, "downloading the plugin manifest
+//     failed" and no Hub plugin (e.g. Flipping Copilot) could be installed next to EVI.
+//   * a release is immutable; repo.runelite.net can republish a SNAPSHOT with different bytes under
+//     the same name, which is a poor pin for something going through Hub review.
+// Pinned exactly rather than '+', so the build never drifts to whatever is newest. Move it forward
+// deliberately when a newer release is out.
+def runeLiteVersion = '1.12.39'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.6.2'
+version = '3.7.0'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

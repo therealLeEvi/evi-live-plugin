@@ -18,6 +18,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextArea;
+import javax.swing.text.DefaultCaret;
 import javax.swing.SwingUtilities;
 import javax.swing.border.CompoundBorder;
 import net.runelite.client.ui.ColorScheme;
@@ -136,11 +137,21 @@ final class EviLivePanel extends PluginPanel {
   }
 
   void status(String message) {
-    SwingUtilities.invokeLater(() -> status.setText(message));
+    SwingUtilities.invokeLater(() -> setIfChanged(status, message));
   }
 
   void suggestion(String message) {
-    SwingUtilities.invokeLater(() -> suggestion.setText(message == null || message.isEmpty() ? "No suggestion yet." : message));
+    SwingUtilities.invokeLater(() -> setIfChanged(suggestion, message == null || message.isEmpty() ? "No suggestion yet." : message));
+  }
+
+  /** Rewrites a text area only when its text actually differs. The poll re-sends the same text every
+   *  two seconds, and rewriting it anyway re-lays-out the sidebar for nothing -- and, before the
+   *  caret fix in bodyText, scrolled it too. EDT only. Package-private so the panel test can check it. */
+  static boolean setIfChanged(JTextArea area, String text) {
+    String next = text == null ? "" : text;
+    if (next.equals(area.getText())) return false;
+    area.setText(next);
+    return true;
   }
 
   /** Orange suggestion text for a sell that would lose GP right now; brand teal otherwise. */
@@ -151,8 +162,8 @@ final class EviLivePanel extends PluginPanel {
   void offerHint(String message) {
     SwingUtilities.invokeLater(() -> {
       boolean any = message != null && !message.isEmpty();
-      offerHint.setText(any ? message : "");
-      offerHint.setVisible(any);
+      setIfChanged(offerHint, any ? message : "");
+      if (offerHint.isVisible() != any) offerHint.setVisible(any);
     });
   }
 
@@ -254,6 +265,12 @@ final class EviLivePanel extends PluginPanel {
 
   private static JTextArea bodyText(String value) {
     JTextArea field = new JTextArea(value);
+    // A JTextArea's default caret follows every setText to the end of the new text and then scrolls
+    // the sidebar to keep that caret visible. These areas are rewritten on every 2-second poll, and
+    // the offer warnings sit at the bottom -- so the sidebar was dragged back down to them every two
+    // seconds and could not stay scrolled to the top (reported from the live client). Read-only text
+    // has no use for a caret that moves, so it never does.
+    ((DefaultCaret) field.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
     field.setEditable(false);
     field.setLineWrap(true);
     field.setWrapStyleWord(true);

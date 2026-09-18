@@ -7,12 +7,19 @@ import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.Keybind;
 import net.runelite.client.config.ModifierlessKeybind;
 
+// Every description below is the hover tooltip in RuneLite's settings panel, so each is kept to one
+// short plain sentence -- the user reported the old ones, some over 700 characters, as unreadable.
+// The reasoning and backtest numbers behind each setting live in README.md (the settings reference
+// and the changelog), which is where they can be read properly.
+//
+// Changing `name` or `description` is safe. NEVER change a `keyName`: RuneLite stores settings by
+// keyName, so a renamed key silently resets that setting for every existing user.
 @ConfigGroup("evilive")
 public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "suggestionKeybind",
     name = "Fill suggestion hotkey",
-    description = "While a GE quantity or price prompt is open, fills in EVI's suggested value for that one field. Never opens, selects an item for, or confirms an offer by itself.",
+    description = "Fills in EVI's suggested quantity or price while a GE prompt is open. Never confirms an offer.",
     position = 1
   )
   default Keybind suggestionKeybind() {
@@ -21,8 +28,8 @@ public interface EviLiveConfig extends Config {
 
   @ConfigItem(
     keyName = "showSuggestionHint",
-    name = "Show suggestion hint in chatbox",
-    description = "While a GE quantity or price prompt is open, shows a text line naming EVI's suggested value and the hotkey that fills it (now works for ANY item you're buying or selling, not only EVI's own top pick -- see LOCAL-API.md). Also highlights EVI's suggested item's own row in the GE item-search results list while you're searching, and adds a clickable 'EVI item: <name>' row there (same technique, same search widget, Flipping Copilot's own published Plugin Hub listing uses for its equivalent row) that jumps straight to the suggested item on click or Enter, same as Copilot's does. Turning this off disables all of the above.",
+    name = "Show GE hints",
+    description = "Shows EVI's suggestion in the GE offer prompt and highlights the suggested item in search.",
     position = 2
   )
   default boolean showSuggestionHint() {
@@ -32,7 +39,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "minProfitTier",
     name = "Min predicted profit",
-    description = "Suggestions below this predicted profit (current buy/sell margin x suggested quantity) are skipped. Auto applies no floor at all -- useful if you want EVI to also point out thin-margin, high-volume flips, which is exactly what a low-capital account often needs. Replaces the old free-form gp field; if you had that set, pick the closest tier here.",
+    description = "Skips suggestions predicted to make less than this. Auto has no minimum.",
     position = 3
   )
   default MinProfitTier minProfitThreshold() {
@@ -42,7 +49,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "itemBlocklist",
     name = "Item blocklist (item IDs)",
-    description = "Comma-separated item IDs EVI should never suggest, e.g. 4151,995. Leave blank for no blocklist. Find an item's ID with the scanner's Item lookup.",
+    description = "Item IDs EVI should never suggest, separated by commas, e.g. 4151,995.",
     position = 4
   )
   default String itemBlocklist() {
@@ -52,17 +59,19 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "riskLevel",
     name = "Risk level",
-    description = "Tunes ranking using your own win-rate history (not real market volatility, which this free tier doesn't track). Low: a longer, more consistent winning history required. Medium: the original balance. High: accepts a thinner track record and leans more on raw average profit.",
+    description = "How much winning history EVI wants before trusting an item. Low is the strictest.",
     position = 5
   )
+  // Low by default: measured over 90 days, the old Medium default did no better than picking an
+  // eligible item at random, because one lucky flip could carry an item. See the bridge's own default.
   default RiskLevel riskLevel() {
-    return RiskLevel.MEDIUM;
+    return RiskLevel.LOW;
   }
 
   @ConfigItem(
     keyName = "includeMarketSuggestions",
     name = "Include market-wide suggestions",
-    description = "When you have no reviewed flip yet that's currently profitable, fall back to a market-wide pick ranked purely by current margin and trading volume across the whole item catalogue -- not just items you've flipped before. Off by default: suggestions stay limited to your own reviewed flip history, as before.",
+    description = "When your own trade history has nothing, suggest from the whole GE catalogue.",
     position = 6
   )
   default boolean includeMarketSuggestions() {
@@ -72,7 +81,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "tradingProfile",
     name = "Trading profile",
-    description = "Starter restricts market-wide suggestions to items the Grand Exchange charges no tax on -- cheap, heavily traded things that sell quickly. Backtested over 90 days on a 2m stack it completed 325 trades instead of 220, won 98% instead of 85%, and left 5% of capital stuck instead of 29%, with a far smaller worst case. Each trade earns less, so this is a way to learn the mechanics and grow steadily rather than to make a fortune quickly. Standard searches the whole catalogue. Either way, suggestions from your own flip history are unaffected.",
+    description = "Starter sticks to cheap, untaxed, fast-selling items. Standard uses the whole catalogue.",
     position = 6
   )
   default TradingProfile tradingProfile() {
@@ -82,7 +91,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "maxTradeShare",
     name = "Max share of cash per trade",
-    description = "Limits how much of your cash stack one market-wide suggestion may commit, so a single slow-selling item can't tie up everything you have. Replaying 90 days of real prices through EVI's own ranking, uncapped market-wide suggestions lost around 93m gp -- almost entirely from expensive items bought with nearly the whole stack and still unsold a day later -- while capping each trade at a quarter of the stack turned the same 90 days positive, with no fewer suggestions. It never withholds a suggestion; it only makes it smaller, and says so. Applies to market-wide picks only: suggestions from your own flip history keep the size your own trading history implies. Set to No limit for the old behaviour.",
+    description = "The most of your cash a single market-wide suggestion may use.",
     position = 7
   )
   default MaxTradeShare maxTradeShare() {
@@ -92,7 +101,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "tradeDuration",
     name = "Target trade duration",
-    description = "Prefer trades that can realistically complete within about this long, estimated from the OSRS Wiki price API's own recent trading-volume data for each item -- not a guarantee, just a rough sanity check. A candidate too slow-moving even for one unit within this window is skipped; one that's only realistic at a smaller quantity gets sized down instead. No preference (the default) leaves suggestions exactly as before this setting existed.",
+    description = "Prefers trades that can finish within about this long. A rough estimate, not a guarantee.",
     position = 7
   )
   default TradeDuration tradeDuration() {
@@ -102,28 +111,39 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "suggestIdleInventory",
     name = "Suggest selling idle inventory",
-    description = "When nothing else has a suggestion (no active hold, no profitable flip history), scan your current inventory for anything worth roughly 100k gp or more with no active GE offer, and suggest selling it -- even if EVI never saw you buy it (a drop, a quest reward, or anything acquired before this bridge started watching). Off by default: EVI's suggestions stay limited to things it actually observed you trade, as before.",
+    description = "Also suggests selling valuable inventory items EVI never saw you buy.",
     position = 8
   )
   default boolean suggestIdleInventory() {
     return false;
   }
 
+  // Renamed from "Price forecast for suggestions". Calibration over 90 days found the forecast's
+  // direction calls wrong more often than chance, so it no longer predicts price at all; what it
+  // measurably predicts is whether a trade's sell side fills, and that is all it is now used for
+  // (see bridge/fillOutlook.mjs). Same keyName, so existing choices are kept.
   @ConfigItem(
     keyName = "forecastHorizon",
-    name = "Price forecast for suggestions",
-    description = "Loads the OSRS Wiki's recent price history for EVI's suggested buy and runs the same momentum/volume forecast the scanner's own Predict button uses, over roughly this horizon, before showing the suggestion -- so a swing against you has a chance to be caught before you commit capital, not just after. Off by default: suggestions carry no forecast and cost no extra Wiki API call, exactly as before this setting existed. Never checked for a \"sell what you're already holding\" reminder -- there's no buy decision left to forecast there.",
+    name = "Exit-risk check",
+    description = "Warns when items with a similar recent price pattern often failed to sell in time.",
     position = 9
   )
   default ForecastHorizon forecastHorizon() {
     return ForecastHorizon.OFF;
   }
 
+  // Hidden, not removed: it currently has no effect. "Skip" used to drop a candidate on an
+  // unfavourable forecast, but the forecast was measured to be wrong more often than right, so
+  // skipping is switched off in the bridge (FORECAST_MAY_DROP_CANDIDATES in suggestions.mjs). A
+  // setting that does nothing is the least clear thing a settings panel can show. Kept under its
+  // keyName so a stored choice survives, and so it can be unhidden if a recalibrated forecast earns
+  // the right to rule trades out again.
   @ConfigItem(
     keyName = "forecastPolicy",
     name = "On an unfavorable forecast",
-    description = "Only checked when \"Price forecast for suggestions\" above isn't Off. Warn: keep the suggestion, with the forecast folded into its reasoning text so you can weigh it yourself. Skip: drop that candidate entirely and rank the next-best one instead, retrying a few times before falling back exactly as if forecasting were off.",
-    position = 10
+    description = "Inactive: the exit-risk check only warns and never skips a trade.",
+    position = 10,
+    hidden = true
   )
   default ForecastPolicy forecastPolicy() {
     return ForecastPolicy.WARN;
@@ -141,7 +161,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "requireMarginAboveNoise",
     name = "Require margin above price noise",
-    description = "EXPERIMENTAL -- currently far too strict: in testing against live prices it skipped almost every candidate, including stable high-volume flips, which can leave you with no suggestion at all. Before suggesting a buy, checks the item's own recent price history and skips it (trying the next-best pick instead) if the predicted margin is thinner than that specific item's measured short-term price wobble. Off by default until its measurement is recalibrated.",
+    description = "Experimental and far too strict: skips almost every trade. Best left off.",
     position = 11
   )
   default boolean marginSafetyCushion() {

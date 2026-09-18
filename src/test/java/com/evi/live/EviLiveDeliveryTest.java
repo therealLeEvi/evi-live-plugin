@@ -228,7 +228,15 @@ public final class EviLiveDeliveryTest {
       public RiskLevel riskLevel(){return RiskLevel.MEDIUM;}
       public boolean marginSafetyCushion(){return false;}
     });
-    check("".equals(suggestionQuery.invoke(mediumRisk)),"Explicit medium risk must be left off the query, matching the bridge's own default");
+    // Low is now the default on both sides, so Medium must be sent explicitly -- otherwise choosing
+    // Medium would silently get the bridge's Low default and the setting would lie.
+    check("risk=medium".equals(suggestionQuery.invoke(mediumRisk)),"Medium must be sent explicitly now that Low is the default");
+    EviLivePlugin lowRisk=new EviLivePlugin();
+    set(lowRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    check(EviLiveConfig.class.getMethod("riskLevel").invoke(new EviLiveConfig(){})==RiskLevel.LOW,"Low is the default risk level");
+    check("".equals(suggestionQuery.invoke(lowRisk)),"The default (Low) is left off the query, matching the bridge's own default");
 
     EviLivePlugin marketOnly=new EviLivePlugin();
     set(marketOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
@@ -491,6 +499,47 @@ public final class EviLiveDeliveryTest {
     check(EviLivePlugin.noSuggestionMessage(true,false,0,2).contains("market-wide"),"With finished offers waiting to be collected, ranking did happen, so the ordinary wording stands");
     check(EviLivePlugin.noSuggestionMessage(true,false,-1,-1).equals(EviLivePlugin.noSuggestionMessage(true,false)),"An unknown slot count must change nothing");
     check(EviLivePlugin.noSuggestionMessage(true,false,1,0).contains("market-wide"),"A free slot must change nothing");
+    // The sell-side reserve: a buy held back so the exits already owed still have somewhere to go.
+    check(EviLivePlugin.sellReserveMessage(3).contains("3 items you're holding with no sell placed yet"),"The reserve message must say how many exits are owed");
+    check(EviLivePlugin.sellReserveMessage(1).contains("1 item you're holding"),"and read correctly for a single one");
+    check(!EviLivePlugin.sellReserveMessage(2).contains("settings"),"It must never blame the settings, which were never the reason");
+    // Buys in progress bring their own slot for the sell; the wording must not claim otherwise, or it
+    // describes the four-slot bug the user found rather than the rule that replaced it.
+    check(!EviLivePlugin.sellReserveMessage(2).contains("buying"),"In-progress buys never owe a slot, so the message must not say they do");
+    check(EviLivePlugin.sellReserveMessage(null).contains("holding with no sell placed yet"),"An older bridge sending no count must still produce sensible wording");
+    // Gson must accept the bridge's slots object, including an older build that omits it entirely.
+    EviLivePlugin.SuggestionResponse withSlots=new Gson().fromJson("{\"suggestion\":null,\"slots\":{\"free\":2,\"collectable\":0,\"sellSlotsOwed\":3,\"buysHeldForExits\":true}}",EviLivePlugin.SuggestionResponse.class);
+    check(withSlots.slots!=null && withSlots.slots.buysHeldForExits && withSlots.slots.sellSlotsOwed==3,"The slots object must parse");
+    EviLivePlugin.SuggestionResponse noSlots=new Gson().fromJson("{\"suggestion\":null}",EviLivePlugin.SuggestionResponse.class);
+    check(noSlots.slots==null,"A bridge that doesn't send slots must leave it null rather than fabricating a reserve");
+
+    // heldPositions=: confirms which journal positions are really in the inventory. Reported live:
+    // two long-gone positions (adamant darts, adamant keel parts) reserved the last two slots,
+    // because the journal only sees the Grand Exchange and never learns stock left another way.
+    EviLivePlugin heldPlugin=new EviLivePlugin();
+    set(heldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    // The bridge believes 810 (darts), 32032 (keel parts) and 4151 are held; only 4151 really is.
+    set(heldPlugin,"bridgePositionItems",new java.util.TreeSet<>(java.util.Arrays.asList(810,32032,4151)));
+    set(heldPlugin,"inventoryItemIds",new java.util.HashSet<>(java.util.Arrays.asList(4151,995,2572)));
+    set(heldPlugin,"inventorySnapshotEstablished",false);
+    check("".equals(suggestionQuery.invoke(heldPlugin)),"Before the inventory has loaded, nothing is confirmed, so nothing is sent");
+    set(heldPlugin,"inventorySnapshotEstablished",true);
+    String heldQuery=(String)suggestionQuery.invoke(heldPlugin);
+    check("heldPositions=4151".equals(heldQuery),"Only the position genuinely in the inventory is confirmed (got "+heldQuery+")");
+    check(!heldQuery.contains("810") && !heldQuery.contains("32032"),"Stale positions are never confirmed -- this is the reported bug");
+    check(!heldQuery.contains("995") && !heldQuery.contains("2572"),"Coins and a ring the bridge never asked about must never leave the client");
+    set(heldPlugin,"inventoryItemIds",new java.util.HashSet<>(java.util.Arrays.asList(995,2572)));
+    // Checked and found none: said explicitly, since that is what exposes a stale position -- and an
+    // empty confirmation still reserves nothing on the bridge.
+    check("heldPositions=".equals(suggestionQuery.invoke(heldPlugin)),"A check that finds none of the named positions must still say it checked");
+    resetMethod.invoke(heldPlugin);
+    set(heldPlugin,"inventoryItemIds",new java.util.HashSet<>(java.util.Arrays.asList(4151)));
+    set(heldPlugin,"inventorySnapshotEstablished",true);
+    check("".equals(suggestionQuery.invoke(heldPlugin)),"reset() must forget what the bridge named, so a new session starts unconfirmed");
+    EviLivePlugin.SuggestionResponse withPositions=new Gson().fromJson("{\"slots\":{\"positionItems\":[810,32032]}}",EviLivePlugin.SuggestionResponse.class);
+    check(withPositions.slots.positionItems.length==2 && withPositions.slots.positionItems[0]==810,"positionItems must parse from the bridge's response");
 
     // freeSlots=/collectable=: counted from the 8 real slots and sent only once every one of them
     // has actually been observed this session.
@@ -774,6 +823,23 @@ public final class EviLiveDeliveryTest {
     Suggestion corrected=((SuggestionCache)get(pollPlugin3,"suggestionCache")).get();
     check(corrected!=null && corrected.quantity==11,"pollSuggestion must apply the inventory correction before caching, not just verify presence");
     check(corrected.reasoning.contains("Reduced from 13 to the 11"),"The corrected suggestion's reasoning must explain the reduction");
+
+    // Settings panel: each description is a hover tooltip. The user reported the old ones -- some
+    // over 700 characters -- as unreadable, so they are held to one short sentence here.
+    java.util.Set<String> keyNames=new java.util.TreeSet<>();
+    for(Method m:EviLiveConfig.class.getDeclaredMethods()) {
+      net.runelite.client.config.ConfigItem item=m.getAnnotation(net.runelite.client.config.ConfigItem.class);
+      if(item==null)continue;
+      keyNames.add(item.keyName());
+      check(item.description().length()<=110,"Tooltip for \""+item.name()+"\" is "+item.description().length()+" characters; keep it to one short sentence (110 max)");
+      check(!item.description().isEmpty(),"Every visible setting needs a tooltip: "+item.name());
+    }
+    // RuneLite stores settings by keyName, so renaming one silently resets that setting for every
+    // existing user. Changing names and tooltips is safe; this list must only ever grow.
+    check(keyNames.equals(new java.util.TreeSet<>(java.util.Arrays.asList(
+      "suggestionKeybind","showSuggestionHint","minProfitTier","itemBlocklist","riskLevel","includeMarketSuggestions",
+      "tradingProfile","maxTradeShare","tradeDuration","suggestIdleInventory","forecastHorizon","forecastPolicy","requireMarginAboveNoise"))),
+      "A setting's keyName changed or disappeared, which would reset it for existing users: "+keyNames);
 
     System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion callback, the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion or a sell suggestion with no identifiable buyId; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter");
   }

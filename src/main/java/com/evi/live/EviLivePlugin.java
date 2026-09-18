@@ -120,6 +120,14 @@ public class EviLivePlugin extends Plugin {
   // and filters nothing -- the same fail-open rule as cashStack and membersWorld above.
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
+  // The items the bridge's journal believes are still held (positionItems in its last response). The
+  // journal only sees the Grand Exchange, so stock sold, used or dropped outside it stays "held"
+  // forever -- two such stale positions once reserved the player's last two slots. This plugin
+  // confirms against its own inventory snapshot and sends back only the ones really there
+  // (heldPositions=, see suggestionQuery), exactly as verifyPersistedHolding already does for
+  // suggestions. Only ever echoes IDs the bridge named itself, so no other inventory contents leave
+  // the client. Written by the poll thread, read by the next poll, hence volatile.
+  private volatile Set<Integer> bridgePositionItems=Collections.emptySet();
   // The player's actual current cash stack, read from their own inventory's coins (item 995) on
   // the client thread every tick and cached here for the background poll thread to read (hence
   // volatile) -- never fabricated or assumed. -1 means "not yet known" (e.g. before the inventory
@@ -285,7 +293,7 @@ public class EviLivePlugin extends Plugin {
       return sb.toString().trim();
     }
   }
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -583,6 +591,13 @@ public class EviLivePlugin extends Plugin {
       if(json==null){updatePanelSuggestion(null,"Bridge unreachable -- check it's running and the pairing key matches.");return;}
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
+      // Remember which positions the bridge believes are held, so the next poll can confirm them
+      // against the real inventory. An older bridge that sends none leaves this empty.
+      if(r!=null && r.slots!=null && r.slots.positionItems!=null) {
+        Set<Integer> named=new TreeSet<>();
+        for(int id:r.slots.positionItems)named.add(id);
+        bridgePositionItems=Collections.unmodifiableSet(named);
+      }
       // A reconstructed-from-history suggestion (see Suggestion.persisted) that isn't actually
       // in the inventory right now is stale, not real -- treat it exactly like a manual "Skip
       // this suggestion" click (excludes it for the rest of this session) and re-poll immediately
@@ -598,7 +613,12 @@ public class EviLivePlugin extends Plugin {
       correctSellQuantityAgainstInventory(s);
       suggestionCache.set(s);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
-      updatePanelSuggestion(s,s==null?noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots):null);
+      // A buy held back to keep room for the sells already owed is a different answer from nothing
+      // being eligible, and saying "nothing passes your settings" there would be plainly wrong.
+      String diagnosis=r!=null&&r.slots!=null&&r.slots.buysHeldForExits
+        ?sellReserveMessage(r.slots.sellSlotsOwed)
+        :noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots);
+      updatePanelSuggestion(s,s==null?diagnosis:null);
       updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice);
     } catch(Throwable ex){
       // Deliberately catches Throwable, not just Exception, and kept that way permanently: a
@@ -701,7 +721,9 @@ public class EviLivePlugin extends Plugin {
     String blocklist=sanitizeBlocklist(config.itemBlocklist());
     if(!blocklist.isEmpty()){if(q.length()>0)q.append('&');q.append("blocklist=").append(blocklist);}
     RiskLevel risk=config.riskLevel();
-    if(risk!=null && risk!=RiskLevel.MEDIUM){if(q.length()>0)q.append('&');q.append("risk=").append(risk.param());}
+    // Left off only for LOW, which is now the bridge's own default -- so Medium is sent explicitly,
+    // and choosing it still means Medium rather than silently falling back to the new default.
+    if(risk!=null && risk!=RiskLevel.LOW){if(q.length()>0)q.append('&');q.append("risk=").append(risk.param());}
     if(config.includeMarketSuggestions()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
     // How much of the cash stack one market-wide suggestion may commit (see MaxTradeShare for the
     // backtest that produced the default). OFF is left off the query entirely, like every other
@@ -746,6 +768,23 @@ public class EviLivePlugin extends Plugin {
     int free=freeSlots,collectable=collectableSlots;
     if(free>=0){if(q.length()>0)q.append('&');q.append("freeSlots=").append(free);}
     if(collectable>=0){if(q.length()>0)q.append('&');q.append("collectable=").append(collectable);}
+    // Which of the positions the bridge thinks are held are genuinely in the inventory right now (see
+    // bridgePositionItems). Sent only once the inventory has actually loaded -- before that, nothing
+    // is confirmed, and the bridge reserves nothing for an unconfirmed position. Sorted, like every
+    // other ID list here, so the query string is deterministic.
+    // Sent even when EMPTY once a check has actually been made: "checked, found none of them" is the
+    // most useful answer there is, because that is what exposes a stale position, and omitting the
+    // parameter would make it indistinguishable from "never checked".
+    Set<Integer> named=bridgePositionItems;
+    if(inventorySnapshotEstablished && !named.isEmpty()) {
+      Set<Integer> held=new TreeSet<>();
+      Set<Integer> inventory=inventoryItemIds;
+      for(int id:named)if(inventory.contains(id))held.add(id);
+      if(q.length()>0)q.append('&');
+      q.append("heldPositions=");
+      boolean first=true;
+      for(int id:held){if(!first)q.append(',');q.append(id);first=false;}
+    }
     // Session-only, not a config setting: items to leave out of ranking right now because you
     // already have an active/uncollected GE slot for them (activeSlotItemIds, auto-detected) or
     // you manually skipped them via the sidebar (skippedItemIds). Merged and sorted here so the
@@ -844,6 +883,18 @@ public class EviLivePlugin extends Plugin {
   // thing skipping every candidate. Pure, so it's tested directly.
   static String noSuggestionMessage(boolean includeMarket, boolean cushion) {
     return noSuggestionMessage(includeMarket,cushion,-1,-1);
+  }
+  // Stock sitting in the inventory with no sell placed has no slot to sell from. While the free
+  // slots are only enough for those exits, EVI holds new buys back rather than filling the Grand
+  // Exchange with purchases and leaving that stock stranded -- which is how capital gets stuck.
+  // Deliberately NOT counting buys still in progress: a buy vacates its own slot when collected and
+  // the sell goes straight into it, and counting them is exactly what once capped the player at four
+  // slots out of eight. Pure, so it is tested directly. owed may be null from an older bridge.
+  static String sellReserveMessage(Integer owed) {
+    String count=owed==null?"the items you're holding with no sell placed yet"
+      :owed+" item"+(owed==1?"":"s")+" you're holding with no sell placed yet";
+    return "Holding off on a new buy: your remaining Grand Exchange slots are being kept for selling "
+      +count+". Place those sells and suggestions resume.";
   }
   // As above, plus what the Grand Exchange itself allows right now (see the freeSlots/collectableSlots
   // fields). With all 8 slots occupied and nothing collectable, the bridge deliberately doesn't rank
@@ -977,7 +1028,12 @@ public class EviLivePlugin extends Plugin {
   // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
   // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
   // get matched back up against activeOffers by itemId.
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;}
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;}
+  // What the bridge made of the Grand Exchange's capacity this poll (see slotCapacity and the
+  // sell-side reserve in bridge/server.mjs). Boxed Integers so "not known" stays distinct from zero,
+  // exactly like the plugin's own freeSlots/collectableSlots fields; Gson leaves them null when the
+  // bridge is an older build that doesn't send this at all, which reads as "nothing to say".
+  static class SlotState {Integer free,collectable,sellSlotsOwed;boolean full,tight,buysHeldForExits;int[] positionItems;}
   // One entry per sell offer that has been sitting long enough to be worth mentioning, built by the
   // bridge from its own journal (see bridge/relist.mjs). `message` is already a complete, hedged
   // sentence naming the market price and, when the cost basis is known, the break-even price; the

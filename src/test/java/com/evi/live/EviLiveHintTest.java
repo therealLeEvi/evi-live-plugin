@@ -137,6 +137,25 @@ public class EviLiveHintTest {
     check(fc.chatboxContainer.createdChildren.size() == 1, "An open-item fallback must reuse the same hint widget, not create another one");
     String shownOpenItem = fc.chatboxContainer.createdChildren.get(0).text;
     check(shownOpenItem.contains("210") && shownOpenItem.toLowerCase().contains("buy"), "Open-item fallback must show its buy price when there's no ranked suggestion for this item: " + shownOpenItem);
+
+    // The reported loss: a held Eclipse Moon chestplate (broken) sold through this fallback, which
+    // never knew what the player paid, so the prompt offered 595,350 -- their own buy price -- with
+    // no warning, and the sale lost exactly the tax. Parsed exactly as the bridge now sends it (see
+    // withCostBasis in bridge/suggestions.mjs).
+    fc.offerCreationType = 1;
+    fc.offerContainer.children.get(20).text = "Sell offer";
+    openItemPriceCache.set(new com.google.gson.Gson().fromJson(
+      "{\"itemId\":999,\"buyPrice\":595350,\"sellPrice\":595350,\"action\":\"sell\",\"breakEvenPrice\":607499,\"lossIfSoldNow\":11907}", Suggestion.class));
+    hint.update();
+    String shownHeldLoss = fc.chatboxContainer.createdChildren.get(0).text;
+    check(shownHeldLoss.contains("LOSS") && shownHeldLoss.contains(String.format("%,d", 607499)), "Selling a held item below its break-even through the open-item fallback must warn with the break-even: " + shownHeldLoss);
+    check(shownHeldLoss.contains(String.format("%,d", 595350)), "A warning, never a block: the price is still offered: " + shownHeldLoss);
+    // And the same fallback with no cost basis (an item the player does not hold) stays silent.
+    openItemPriceCache.set(EviLiveSuggestionTest.openItemPrice(999, 595350, 595350));
+    hint.update();
+    check(!fc.chatboxContainer.createdChildren.get(0).text.contains("LOSS"), "With no known cost there is nothing to warn about, and nothing is guessed");
+    fc.offerCreationType = 0;
+    fc.offerContainer.children.get(20).text = "Buy offer";
     openItemPriceCache.set(null);
 
     // Prompt closes entirely, then a fresh one opens: must drop the old widget reference and

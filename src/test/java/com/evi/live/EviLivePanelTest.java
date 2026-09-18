@@ -58,8 +58,23 @@ public final class EviLivePanelTest {
       if(labels(panel).stream().anyMatch(l->l.startsWith("BUY ")||l.startsWith("SELL ")))throw new AssertionError("An empty offer list must remove every previous row");
       List<Component> afterClear=new ArrayList<>();visit(panel,afterClear);
       if(afterClear.stream().noneMatch(c->c instanceof javax.swing.JTextArea && "No offers in the Grand Exchange.".equals(((javax.swing.JTextArea)c).getText())))throw new AssertionError("An empty offer list must say so");
+
+      // Scrolling: reported from the live client, the sidebar could not stay scrolled to the top
+      // because every text area's caret followed each 2-second rewrite and scrolled to it. No
+      // sidebar text area may move its caret on an update.
+      for(Component c:afterClear) {
+        if(!(c instanceof javax.swing.JTextArea))continue;
+        javax.swing.text.Caret caret=((javax.swing.JTextArea)c).getCaret();
+        if(!(caret instanceof javax.swing.text.DefaultCaret)||((javax.swing.text.DefaultCaret)caret).getUpdatePolicy()!=javax.swing.text.DefaultCaret.NEVER_UPDATE)
+          throw new AssertionError("A sidebar text area still moves its caret on update, which scrolls the sidebar: \""+((javax.swing.JTextArea)c).getText()+"\"");
+      }
+      // And the same text re-sent by the poll must not be rewritten at all.
+      javax.swing.JTextArea probe=new javax.swing.JTextArea("same");
+      if(EviLivePanel.setIfChanged(probe,"same"))throw new AssertionError("Unchanged text must not be rewritten");
+      if(!EviLivePanel.setIfChanged(probe,"different")||!"different".equals(probe.getText()))throw new AssertionError("Changed text must be written");
+      if(!EviLivePanel.setIfChanged(probe,null)||!"".equals(probe.getText()))throw new AssertionError("null clears the text rather than throwing");
     });
-    System.out.println("PASS: sidebar pairing callback, masked key input and clearing after save, the skip-suggestion button callback, the personal-use and not-held button callbacks, and the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing)");
+    System.out.println("PASS: sidebar pairing callback, masked key input and clearing after save, the skip-suggestion button callback, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), and the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten)");
   }
   private static List<String> labels(Container panel) {
     List<Component> all=new ArrayList<>();visit(panel,all);
