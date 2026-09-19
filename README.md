@@ -1,6 +1,6 @@
 # EVI Live (Local)
 
-A passive Grand Exchange companion for **EVI**, a local, personal flip-tracking tool. This plugin only observes the Grand Exchange offers you place yourself and reports them to a bridge running on your own computer — it never sends anything anywhere else, and it never places, edits, or confirms an offer on your behalf.
+A passive Grand Exchange companion for **EVI**, a local, personal flip-tracking tool. This plugin observes the Grand Exchange offers you place yourself, plus the few inventory details listed under Privacy below, and reports them to a bridge running on your own computer — it never sends anything anywhere else, and it never places, edits, or confirms an offer on your behalf.
 
 ## What it does
 
@@ -31,7 +31,12 @@ On first use, open the plugin's sidebar panel, enter the pairing key shown by th
 ## Privacy
 
 - All network activity is to `127.0.0.1` (your own computer) only. No external servers, no analytics, no telemetry.
-- Only offers you place yourself are observed; nothing about other players is collected.
+- Besides your own Grand Exchange offers, the plugin reads exactly these, all sent only to your own bridge:
+  - your **coin count**, to size suggestions to what you can afford;
+  - the **world type** (members or free-to-play), so members-only items are not suggested on a free-to-play world;
+  - whether items the bridge believes you still hold from earlier purchases are **in your inventory** — it reports back only those item IDs, never the rest of your inventory;
+  - your **full inventory**, only if you turn on *Suggest selling idle inventory*, which is **off by default**.
+- Nothing about other players is collected, and nothing from chat or your bank. Your account name is never sent; accounts are told apart by a salted pseudonym.
 - No automation: the plugin never opens a menu, clicks a button, selects an item, confirms an offer, or otherwise acts in the game world on its own. Every action described above either just displays information, or fills a text field you already have open — you still make and confirm every trade yourself.
 
 ## License
