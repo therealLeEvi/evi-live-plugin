@@ -18,12 +18,15 @@ public final class EviLivePanelTest {
     }
   }
   public static void main(String[] args) throws Exception {
+    AtomicReference<EviLivePanel> built=new AtomicReference<>();
     SwingUtilities.invokeAndWait(()->{
       AtomicReference<String> saved=new AtomicReference<>();
       java.util.concurrent.atomic.AtomicInteger skips=new java.util.concurrent.atomic.AtomicInteger();
       java.util.concurrent.atomic.AtomicInteger personalUses=new java.util.concurrent.atomic.AtomicInteger();
       java.util.concurrent.atomic.AtomicInteger notHelds=new java.util.concurrent.atomic.AtomicInteger();
-      EviLivePanel panel=new EviLivePanel(saved::set,skips::incrementAndGet,personalUses::incrementAndGet,notHelds::incrementAndGet);
+      java.util.concurrent.atomic.AtomicInteger blocks=new java.util.concurrent.atomic.AtomicInteger();
+      java.util.concurrent.atomic.AtomicInteger resets=new java.util.concurrent.atomic.AtomicInteger();
+      final EviLivePanel panel=new EviLivePanel(saved::set,skips::incrementAndGet,personalUses::incrementAndGet,notHelds::incrementAndGet,blocks::incrementAndGet,resets::incrementAndGet);
       List<Component> components=new ArrayList<>();visit(panel,components);
       JPasswordField field=(JPasswordField)components.stream().filter(x->x instanceof JPasswordField).findFirst().orElseThrow();
       List<JButton> buttons=components.stream().filter(x->x instanceof JButton).map(x->(JButton)x).collect(java.util.stream.Collectors.toList());
@@ -43,6 +46,14 @@ public final class EviLivePanelTest {
       JButton notHeldButton=buttons.stream().filter(b->"I don't have this anymore".equals(b.getText())).findFirst().orElseThrow();
       notHeldButton.doClick();
       if(notHelds.get()!=1)throw new AssertionError("Not-held callback must fire exactly once per click");
+      // Block: Skip made permanent, so a player can refuse an item without looking up its ID.
+      JButton blockButton=buttons.stream().filter(b->"Block this item".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a Block button"));
+      blockButton.doClick();
+      if(blocks.get()!=1)throw new AssertionError("Block callback must fire exactly once per click");
+      // The profit line and its Reset: asked for so the sidebar shows what EVI has actually realised.
+      JButton resetButton=buttons.stream().filter(b->"Reset profit count".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a profit Reset button"));
+      resetButton.doClick();
+      if(resets.get()!=1)throw new AssertionError("Reset callback must fire exactly once per click");
 
       // Active offers list: every occupied slot gets its own row, terminal-but-uncollected included.
       EviLivePlugin.OfferRow buying=new EviLivePlugin.OfferRow(0,2,243,4000,11000,true,"Steel cannonball","BUYING");
@@ -73,9 +84,63 @@ public final class EviLivePanelTest {
       if(EviLivePanel.setIfChanged(probe,"same"))throw new AssertionError("Unchanged text must not be rewritten");
       if(!EviLivePanel.setIfChanged(probe,"different")||!"different".equals(probe.getText()))throw new AssertionError("Changed text must be written");
       if(!EviLivePanel.setIfChanged(probe,null)||!"".equals(probe.getText()))throw new AssertionError("null clears the text rather than throwing");
+
+      built.set(panel);
     });
-    System.out.println("PASS: sidebar pairing callback, masked key input and clearing after save, the skip-suggestion button callback, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), and the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten)");
+
+    // The profit line: the bridge's own matched-flip total, what it leaves out said beside it, and an
+    // unreadable answer admitted rather than shown as zero.
+    final EviLivePanel profitPanel=built.get();
+    EviLivePlugin.Profit p=new EviLivePlugin.Profit();
+    p.gp=2020133;p.trades=43;p.winners=30;p.losers=13;p.unmatchedSales=17;p.openPositions=4;
+    profitPanel.profit(p);
+    SwingUtilities.invokeAndWait(()->{});
+    String line=profitText(profitPanel);
+    if(!line.startsWith("+"+String.format("%,d",2020133)+" gp"))throw new AssertionError("The profit line must lead with the figure: "+line);
+    if(!line.contains("everything EVI has matched"))throw new AssertionError("Without a reset it must say what it covers: "+line);
+    if(!line.contains("43 trades: 30 up, 13 down"))throw new AssertionError("Trades and the split belong on the line: "+line);
+    if(!line.contains("17 sales EVI never saw bought")||!line.contains("4 purchases not yet sold"))
+      throw new AssertionError("What the total leaves out must be stated, never folded in: "+line);
+    EviLivePlugin.Profit since=new EviLivePlugin.Profit();
+    since.since=1758000000000L;since.gp=-5000;since.trades=1;since.losers=1;
+    profitPanel.profit(since);
+    SwingUtilities.invokeAndWait(()->{});
+    String reset=profitText(profitPanel);
+    if(!reset.startsWith(String.format("%,d",-5000)+" gp (since you reset"))throw new AssertionError("A reset count says so, and a loss is not dressed up: "+reset);
+    if(reset.contains("Not counted"))throw new AssertionError("With nothing left out, the caveat must not appear: "+reset);
+    profitPanel.profit(null);
+    SwingUtilities.invokeAndWait(()->{});
+    if(!profitText(profitPanel).contains("Profit unavailable"))throw new AssertionError("An unreadable figure must be admitted, not shown as zero");
+    profitPanel.profitResetPending();
+    SwingUtilities.invokeAndWait(()->{});
+    if(!profitText(profitPanel).contains("Counting from now"))throw new AssertionError("Reset needs immediate feedback while the poll catches up");
+
+    // Colour scheme: switching it repaints the panel in place -- a cosmetic setting that needed a
+    // client restart would read as the setting not working. Each step is checked in a later EDT turn,
+    // because applyTheme queues its repaint rather than painting inside the caller's own turn.
+    EviLivePanel panel=built.get();
+    panel.applyTheme(PanelTheme.OLD_SCHOOL);
+    panel.offers(java.util.Arrays.asList(new EviLivePlugin.OfferRow(0,2,100,5,10,true,"Test item","BUYING")));
+    SwingUtilities.invokeAndWait(()->{
+      if(!panel.getBackground().equals(EviTheme.OLD_SCHOOL.background))throw new AssertionError("The panel must repaint in the chosen scheme");
+      List<Component> themed=new ArrayList<>();visit(panel,themed);
+      if(themed.stream().noneMatch(c->c instanceof javax.swing.JPanel && c.getBackground().equals(EviTheme.OLD_SCHOOL.card)))
+        throw new AssertionError("An offer row rebuilt after the switch must use the chosen scheme too");
+    });
+    panel.applyTheme(PanelTheme.RUNELITE);
+    SwingUtilities.invokeAndWait(()->{
+      if(!panel.getBackground().equals(EviTheme.RUNELITE.background))throw new AssertionError("Switching back must restore RuneLite's own colours");
+    });
+    System.out.println("PASS: the profit line (figure, trades, what it leaves out, a reset count, an unreadable answer, and reset feedback), the colour-scheme switch repainting in place (including rows rebuilt afterwards), sidebar pairing callback, masked key input and clearing after save, the skip-suggestion and block button callbacks, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), and the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten)");
   }
+  /** The profit line's current text: the one text area that starts with a figure or its own status. */
+  private static String profitText(Container panel) {
+    List<Component> all=new ArrayList<>();visit(panel,all);
+    return all.stream().filter(c->c instanceof javax.swing.JTextArea).map(c->((javax.swing.JTextArea)c).getText())
+      .filter(t->t.startsWith("+")||t.startsWith("-")||t.startsWith("Profit unavailable")||t.startsWith("Counting from now")||t.startsWith("Waiting for the bridge"))
+      .findFirst().orElse("");
+  }
+
   private static List<String> labels(Container panel) {
     List<Component> all=new ArrayList<>();visit(panel,all);
     return all.stream().filter(c->c instanceof javax.swing.JLabel).map(c->((javax.swing.JLabel)c).getText()).collect(java.util.stream.Collectors.toList());

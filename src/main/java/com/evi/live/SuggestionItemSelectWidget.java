@@ -3,6 +3,7 @@ package com.evi.live;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
+import net.runelite.api.VarClientStr;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
@@ -56,6 +57,22 @@ import net.runelite.api.widgets.WidgetType;
  * not actually open -- this only ever applies while buying, since selling never goes through item
  * search at all, so this naturally never fires there without needing its own check for it).
  * Governed by the same showSuggestionHint config toggle as the hint text and search highlight.
+ *
+ * Placement, and living next to other plugins (2026-09-20): the row sits one row BELOW the top of
+ * the results area, not on it. The top row is where the game shows its own "previous search" line
+ * and where Flipping Copilot draws its "Copilot item" row -- at exactly the position this row used
+ * to occupy, and into child slots 0-3, which it writes by index. With both plugins running, whichever
+ * drew last covered the other, and Copilot's indexed writes could replace this row's widgets outright,
+ * so EVI's row simply vanished while Copilot had a suggestion. Now:
+ *   * the row is always at ROW_Y, directly under the top line, with or without Copilot, so it is in
+ *     the same place either way and never hides the game's previous-search line or anyone's row;
+ *   * its three widgets are created at fixed child slots from CHILD_BASE, far past the handful the
+ *     top line uses, instead of appended wherever the list happens to end;
+ *   * every tick it checks those slots still hold its own widgets and recreates them if not -- the
+ *     game rebuilds the list when the player types or clears the search, and anything else writing
+ *     into those slots would otherwise leave this holding detached widgets and showing nothing;
+ *   * while the player is typing a search, the live results own that space, so the row is hidden
+ *     (the same rule Copilot's row follows) and comes back when the search box is empty again.
  */
 @Singleton
 class SuggestionItemSelectWidget {
@@ -66,8 +83,11 @@ class SuggestionItemSelectWidget {
   private static final int GE_SELECT_ON_OP_ARG = 84;
   private static final int GE_SELECT_ON_KEY_ARG = -2147483640;
 
-  private static final int ROW_X = 114, ROW_Y = 0, ROW_WIDTH = 256, ROW_HEIGHT = 32;
-  private static final int ICON_X = 118, ICON_Y = 6, ICON_SIZE = 20;
+  private static final int ROW_X = 114, ROW_Y = 32, ROW_WIDTH = 256, ROW_HEIGHT = 32;
+  private static final int ICON_X = 118, ICON_Y = ROW_Y + 6, ICON_SIZE = 20;
+  // Fixed child slots for the row, text and icon: well past the top line's own slots (the game's
+  // previous-search widgets, and Copilot's, use 0-3), so neither can overwrite them by index.
+  private static final int CHILD_BASE = 60;
   private static final int TEXT_X = 144, TEXT_WIDTH = 224;
 
   @Inject private Client client;
@@ -94,8 +114,34 @@ class SuggestionItemSelectWidget {
       clear();
       return;
     }
-    if (row == null && !create(results)) return;
+    // Typing: the live results use this space. Hide rather than recreate; the game rebuilds the
+    // list as the player types, and the attachment check below restores the row afterwards.
+    String typed = client.getVarcStrValue(VarClientStr.INPUT_TEXT);
+    if (typed != null && !typed.isEmpty()) {
+      if (attached(results)) setHidden(true);
+      return;
+    }
+    if (!attached(results)) {
+      clear();
+      if (!create(results)) return;
+    }
+    setHidden(false);
     if (shownForItemId != s.itemId) apply(s.itemId, s.name);
+  }
+
+  // True only while all three widgets this holds are still the ones in their slots -- false after the
+  // game rebuilt the list, or anything else wrote into those slots.
+  private boolean attached(Widget parent) {
+    if (row == null) return false;
+    try {
+      return parent.getChild(CHILD_BASE) == row && parent.getChild(CHILD_BASE + 1) == text && parent.getChild(CHILD_BASE + 2) == icon;
+    } catch (Exception ex) {
+      return false;
+    }
+  }
+
+  private void setHidden(boolean hidden) {
+    for (Widget w : new Widget[] {row, text, icon}) if (w != null && w.isSelfHidden() != hidden) w.setHidden(hidden);
   }
 
   /** Drops the widget references; called on mismatch/close and on plugin shutdown. Never attempts
@@ -108,7 +154,7 @@ class SuggestionItemSelectWidget {
 
   private boolean create(Widget parent) {
     try {
-      row = parent.createChild(-1, WidgetType.RECTANGLE);
+      row = parent.createChild(CHILD_BASE, WidgetType.RECTANGLE);
       row.setFilled(true);
       row.setOpacity(255);
       row.setOriginalX(ROW_X);
@@ -120,7 +166,7 @@ class SuggestionItemSelectWidget {
       row.setOnMouseOverListener((JavaScriptCallback) ev -> row.setOpacity(200));
       row.setOnMouseLeaveListener((JavaScriptCallback) ev -> row.setOpacity(255));
 
-      text = parent.createChild(-1, WidgetType.TEXT);
+      text = parent.createChild(CHILD_BASE + 1, WidgetType.TEXT);
       text.setTextColor(EviTheme.BRAND_RGB);
       text.setOriginalX(TEXT_X);
       text.setOriginalY(ROW_Y);
@@ -128,7 +174,7 @@ class SuggestionItemSelectWidget {
       text.setOriginalHeight(ROW_HEIGHT);
       text.setYTextAlignment(1);
 
-      icon = parent.createChild(-1, WidgetType.GRAPHIC);
+      icon = parent.createChild(CHILD_BASE + 2, WidgetType.GRAPHIC);
       icon.setItemQuantity(1);
       icon.setOriginalX(ICON_X);
       icon.setOriginalY(ICON_Y);

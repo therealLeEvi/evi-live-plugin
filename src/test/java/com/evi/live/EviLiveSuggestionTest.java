@@ -39,8 +39,12 @@ public class EviLiveSuggestionTest {
     // getDynamicChildren(), the list-style children of a search results widget, keyed by nothing
     // but position, for EviLiveSearchHighlightTest.
     java.util.List<FakeWidget> dynamicChildren = new java.util.ArrayList<>();
+    // One proxy per fake, like the real client, which hands back the same widget object every time --
+    // SuggestionItemSelectWidget relies on that identity to tell whether its widgets are still attached.
+    private Widget cached;
     Widget proxy() {
-      return (Widget) Proxy.newProxyInstance(Widget.class.getClassLoader(), new Class[]{Widget.class}, (p, m, a) -> {
+      if (cached != null) return cached;
+      return cached = (Widget) Proxy.newProxyInstance(Widget.class.getClassLoader(), new Class[]{Widget.class}, (p, m, a) -> {
         switch (m.getName()) {
           case "getText": return text;
           case "setText": text = (String) a[0]; return null;
@@ -48,12 +52,16 @@ public class EviLiveSuggestionTest {
           case "createChild": {
             FakeWidget child = new FakeWidget();
             createdChildren.add(child);
+            // A real index replaces whatever held that slot, as in the client; -1 appends.
+            if (a != null && a.length > 0 && a[0] instanceof Integer && (Integer) a[0] >= 0) children.put((Integer) a[0], child);
             return child.proxy();
           }
           case "getOriginalY": return originalY;
           case "setOriginalY": originalY = (Integer) a[0]; return null;
           case "getItemId": return itemId;
           case "isHidden": return hidden;
+          case "isSelfHidden": return hidden;
+          case "setHidden": hidden = (Boolean) a[0]; return null;
           case "getBounds": return bounds;
           case "getDynamicChildren": return dynamicChildren.stream().map(FakeWidget::proxy).toArray(Widget[]::new);
           case "setOnOpListener": onOpArgs = (Object[]) a[0]; return null;
@@ -81,6 +89,8 @@ public class EviLiveSuggestionTest {
     // search box isn't open); EviLiveSearchHighlightTest assigns one in to exercise the rest.
     FakeWidget searchResults;
     String lastVarcStr;
+    // What the player has typed into the chatbox input (VarClientStr.INPUT_TEXT); empty by default.
+    String typedSearch = "";
 
     Client proxy() {
       return (Client) Proxy.newProxyInstance(Client.class.getClassLoader(), new Class[]{Client.class}, (p, m, a) -> {
@@ -101,6 +111,7 @@ public class EviLiveSuggestionTest {
             return null;
           }
           case "setVarcStrValue": lastVarcStr = (String) a[1]; return null;
+          case "getVarcStrValue": return typedSearch;
           default: return primitiveDefault(m.getReturnType());
         }
       });

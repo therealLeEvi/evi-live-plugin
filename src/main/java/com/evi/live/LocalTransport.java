@@ -42,6 +42,19 @@ interface LocalTransport {
   default int markNotHeld(String key, String json) throws IOException { return 0; }
 
   /**
+   * The sidebar's Block button: tells the bridge never to suggest buying this item again (see
+   * setBlocked in bridge/server.mjs). Same shape and same "0 = not attempted" default as the two
+   * above. Undone from the scanner, which lists blocked items by name.
+   */
+  default int markBlocked(String key, String json) throws IOException { return 0; }
+
+  /**
+   * The sidebar's "Reset" beside its profit line: start counting realised profit from now (see
+   * resetProfit in bridge/server.mjs). Same shape and same "0 = not attempted" default as the others.
+   */
+  default int resetProfit(String key, String json) throws IOException { return 0; }
+
+  /**
    * Fixed destinations, no listener, redirects, system proxy or game commands.
    *
    * Built on RuneLite's own injected {@link OkHttpClient} rather than a client of its own, so every
@@ -74,6 +87,12 @@ interface LocalTransport {
     }
     public int markNotHeld(String key, String json) throws IOException {
       return post("http://127.0.0.1:51743/api/suggestion/not-held", key, json);
+    }
+    public int markBlocked(String key, String json) throws IOException {
+      return post("http://127.0.0.1:51743/api/suggestion/block", key, json);
+    }
+    public int resetProfit(String key, String json) throws IOException {
+      return post("http://127.0.0.1:51743/api/profit/reset", key, json);
     }
     private int post(String url, String key, String json) throws IOException {
       // Deliberately the byte[] overload, not the String one. RequestBody.create(MediaType, String)

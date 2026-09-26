@@ -30,6 +30,7 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.callback.ClientThread;
@@ -236,7 +237,8 @@ public class EviLivePlugin extends Plugin {
     salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld);
+      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit);
+      panel.applyTheme(config.panelTheme());
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
@@ -468,6 +470,13 @@ public class EviLivePlugin extends Plugin {
     if(panel!=null)panel.offers(geOfferRows);
   }
 
+  // Colour scheme changes take effect at once: the panel repaints itself rather than waiting for a
+  // client restart, which for a purely cosmetic setting would read as the setting not working.
+  @Subscribe public void onConfigChanged(ConfigChanged e) {
+    if(!"evilive".equals(e.getGroup()) || !"panelTheme".equals(e.getKey()))return;
+    if(panel!=null)panel.applyTheme(config.panelTheme());
+  }
+
   @Subscribe public void onGameStateChanged(GameStateChanged e) {
     if(e.getGameState()==GameState.LOGIN_SCREEN || e.getGameState()==GameState.HOPPING || e.getGameState()==GameState.CONNECTION_LOST) {
       if(ready)enqueue(false);
@@ -617,8 +626,10 @@ public class EviLivePlugin extends Plugin {
       // being eligible, and saying "nothing passes your settings" there would be plainly wrong.
       String diagnosis=r!=null&&r.slots!=null&&r.slots.buysHeldForExits
         ?sellReserveMessage(r.slots.sellSlotsOwed)
-        :noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots);
+        :noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots)
+          +reachableMessage(r==null?null:r.reachable);
       updatePanelSuggestion(s,s==null?diagnosis:null);
+      if(panel!=null)panel.profit(r==null?null:r.profit);
       updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice);
     } catch(Throwable ex){
       // Deliberately catches Throwable, not just Exception, and kept that way permanently: a
@@ -645,6 +656,35 @@ public class EviLivePlugin extends Plugin {
     updatePanelSuggestion(null,"Skipped. Checking for the next suggestion...");
     if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
+  // Called only from the sidebar's "Reset" button beside the profit line (Swing EDT). Starts the count
+  // from now; nothing about the journal, the flips or the profit total in the scanner changes, only where
+  // this one line counts from. The POST runs on the background sender, never the Swing thread.
+  private void resetProfit() {
+    String key=pluginKey;
+    if(panel!=null)panel.profitResetPending();
+    if(running && sender!=null)sender.execute(()->{
+      if(key!=null){try{transport.resetProfit(key,"{}");}catch(Exception ignored){}}
+      pollSuggestion(lifecycle);
+    });
+  }
+  // Called only from the sidebar's "Block this item" button (Swing EDT). Skip made permanent: the item
+  // is excluded for this session at once (so the button feels immediate even if the bridge is slow),
+  // and the bridge is told to stop suggesting it for good. Only buys are blocked -- if the player
+  // already holds some, the bridge still sends the sell reminder, since going quiet about stock they
+  // own is how GP ends up stuck. The POST runs on the background sender, never the Swing thread.
+  private void blockSuggestion() {
+    Suggestion s=suggestionCache.get();
+    if(s==null)return;
+    String key=pluginKey;final int itemId=s.itemId;
+    String name=s.name==null||s.name.isEmpty()?"this item":s.name;
+    skippedItemIds.add(itemId);
+    suggestionCache.set(null);
+    updatePanelSuggestion(null,"Blocked "+name+". EVI won't suggest buying it again (undo in the scanner). Checking for the next suggestion...");
+    if(running && sender!=null)sender.execute(()->{
+      if(key!=null){try{transport.markBlocked(key,gson.toJson(new BlockRequest(itemId)));}catch(Exception ignored){}}
+      pollSuggestion(lifecycle);
+    });
+  }
   // Called only from the sidebar's "Personal use" button (Swing EDT). For supplies bought via the
   // GE for the player's own use rather than to flip -- e.g. buying cannonballs to actually fire
   // them -- marks the specific buy behind the current "you're holding this, sell it" suggestion as
@@ -663,17 +703,26 @@ public class EviLivePlugin extends Plugin {
   private void flagPersonalUse() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
-    if(!"sell".equals(s.action) || s.buyId==null || s.buyId.isEmpty()) {
-      if(panel!=null)panel.suggestion("Personal use only applies to a \"you're holding this\" suggestion EVI can trace back to one specific buy.");
+    if(!"sell".equals(s.action)) {
+      if(panel!=null)panel.suggestion("Personal use only applies to a \"you're holding this\" suggestion.");
       return;
     }
-    String key=pluginKey,buyId=s.buyId;
+    // A sell suggestion with no buy behind it comes from the idle-inventory setting: gear EVI only
+    // sees in the inventory and never watched being bought (reported live for a Masori body (f) worn
+    // while training Slayer). There is no purchase to mark, so the item itself is excluded instead --
+    // the bridge keys that by item and applies it only to that same idle-inventory tier, so EVI will
+    // still suggest buying the item to flip. Before this, the button correctly refused to mark
+    // anything and the suggestion simply came back on the next poll.
+    String key=pluginKey,buyId=s.buyId==null||s.buyId.isEmpty()?null:s.buyId;
     skippedItemIds.add(s.itemId);
     heldForResale.remove(s.itemId);
     suggestionCache.set(null);
-    updatePanelSuggestion(null,"Marked as personal use. Checking for the next suggestion...");
+    updatePanelSuggestion(null,buyId==null
+      ?"Marked as yours, not stock. EVI won't suggest selling it again. Checking for the next suggestion..."
+      :"Marked as personal use. Checking for the next suggestion...");
+    final int itemId=s.itemId;
     if(running && sender!=null)sender.execute(()->{
-      if(key!=null){try{transport.markPersonalUse(key,gson.toJson(new PersonalUseRequest(buyId)));}catch(Exception ignored){}}
+      if(key!=null){try{transport.markPersonalUse(key,gson.toJson(buyId==null?PersonalUseRequest.forItem(itemId):new PersonalUseRequest(buyId)));}catch(Exception ignored){}}
       pollSuggestion(lifecycle);
     });
   }
@@ -733,8 +782,17 @@ public class EviLivePlugin extends Plugin {
     if(profile!=null && profile.param()!=null){if(q.length()>0)q.append('&');q.append("profile=").append(profile.param());}
     MaxTradeShare share=config.maxTradeShare();
     if(share!=null && share.percent()>0){if(q.length()>0)q.append('&');q.append("stackShare=").append(share.percent());}
-    TradeDuration duration=config.tradeDuration();
-    if(duration!=null && duration.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(duration.minutes());}
+    // Gear, bulk or all (see SuggestionFocus); "Same as scanner" sends nothing and the bridge uses the
+    // scanner's own Focus switch.
+    SuggestionFocus focus=config.suggestionFocus();
+    if(focus!=null && focus.param()!=null){if(q.length()>0)q.append('&');q.append("focus=").append(focus.param());}
+    SuggestionSource source=config.suggestionSource();
+    if(source!=null && source.param()!=null){if(q.length()>0)q.append('&');q.append("source=").append(source.param());}
+    // Trade pace replaced the old minute-labelled durations on 26 Sept: measured over 60 days,
+    // nothing under two hours ever completed a round trip inside its own window. The old setting is
+    // hidden and no longer read.
+    TradePace pace=config.tradePace();
+    if(pace!=null && pace.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(pace.minutes());}
     // Price-direction forecast for a "buy" suggestion (see ForecastHorizon/ForecastPolicy). Both
     // left off entirely when forecastHorizon is OFF (the default), so an untouched config costs no
     // extra bridge-side Wiki API call and changes nothing -- same treatment as every setting above.
@@ -910,6 +968,17 @@ public class EviLivePlugin extends Plugin {
       ?base+" \"Require margin above price noise\" is on, and it currently skips most candidates -- turn it off to see them."
       :base;
   }
+  // What to add when a minimum profit is the reason there is nothing to show. A new player with a
+  // small cash stack who sets a target out of its reach otherwise sees the same blank panel as
+  // someone whose market genuinely has nothing, and has no way to learn that one step lower would
+  // have given them trades all along. Pure, so it is tested directly; null or a missing figure adds
+  // nothing at all rather than a vague hint.
+  static String reachableMessage(Reachable r) {
+    if(r==null||r.profit==null||r.profit<=0)return "";
+    String item=r.name==null||r.name.isEmpty()?"the best trade EVI can see":r.name;
+    return String.format(" Your minimum profit is what is filtering everything out: the best this cash stack"
+      +" can do right now is %s, at about %,d gp. Lower the minimum to see trades like it.",item,r.profit);
+  }
   private void updatePanelSuggestion(Suggestion s, String diag) {
     if(panel==null)return;
     if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);return;}
@@ -1028,7 +1097,17 @@ public class EviLivePlugin extends Plugin {
   // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
   // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
   // get matched back up against activeOffers by itemId.
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;}
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;Profit profit;Reachable reachable;}
+  // Sent only when there is nothing to suggest AND a minimum profit is set: the best trade the
+  // market actually offers at this cash stack, so "nothing" can say why instead of looking broken.
+  // It is a statement of what exists, not a recommendation -- it has been through none of EVI's
+  // checks, and the wording below never tells anyone to buy it.
+  static final class Reachable {String name;Integer itemId;Long profit;}
+  // Realised profit since the player last pressed Reset (or since EVI's first matched trade), computed by
+  // the bridge from matched flips only -- see profitSince in bridge/server.mjs. unmatchedSales and
+  // openPositions are what that total deliberately leaves out, shown beside it rather than folded in: a
+  // figure that quietly omitted them would read as a loss the moment the records have a gap.
+  static final class Profit {Long since;long gp;int trades,winners,losers,unmatchedSales,openPositions;}
   // What the bridge made of the Grand Exchange's capacity this poll (see slotCapacity and the
   // sell-side reserve in bridge/server.mjs). Boxed Integers so "not known" stays distinct from zero,
   // exactly like the plugin's own freeSlots/collectableSlots fields; Gson leaves them null when the
@@ -1051,7 +1130,13 @@ public class EviLivePlugin extends Plugin {
   // Request body for POST /api/suggestion/personal-use (see flagPersonalUse and
   // LocalTransport.markPersonalUse). personal defaults true -- this plugin only ever flags, never
   // unflags, today; the field exists on the bridge side for a possible future undo.
-  static class PersonalUseRequest {String buyId;boolean personal=true;PersonalUseRequest(String buyId){this.buyId=buyId;}}
+  // buyId marks one specific purchase; itemId (with no buyId) marks an item the player owns and uses,
+  // which is all the idle-inventory tier can offer -- see flagPersonalUse and Store.markPersonalUseItem.
+  // Request body for POST /api/suggestion/block (see blockSuggestion and LocalTransport.markBlocked).
+  static class BlockRequest {int itemId;boolean blocked=true;BlockRequest(int itemId){this.itemId=itemId;}}
+  static class PersonalUseRequest {String buyId;Integer itemId;boolean personal=true;
+    PersonalUseRequest(String buyId){this.buyId=buyId;}
+    static PersonalUseRequest forItem(int itemId){PersonalUseRequest r=new PersonalUseRequest(null);r.itemId=itemId;return r;}}
   // Request body for POST /api/suggestion/not-held (see flagNotHeld and LocalTransport.markNotHeld).
   // reason mirrors Store.closePosition's own two values; the sidebar offers the general "gone some
   // way EVI couldn't see" case, which is sold-untracked.

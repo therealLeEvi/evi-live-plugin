@@ -92,15 +92,44 @@ public class EviLiveItemSelectWidgetTest {
       "The clickable row must be wired with the exact script/itemId/arg triple a genuine GE search-result row carries (on Enter/key-select)");
     check(text.text != null && text.text.contains("EVI item:") && text.text.contains("Test item"), "The label must name the suggested item: " + text.text);
     check(icon.itemId == 1, "The icon must be the suggested item's own icon");
+    // Placement: one row under the top line (where the game's previous search and Copilot's own row
+    // sit), in fixed high child slots so an indexed write to slots 0-3 can never replace them.
+    check(row.originalY == 32 && text.originalY == 32, "The row must sit one row below the top line, with or without other plugins: " + row.originalY);
+    check(fc.searchResults.children.get(60) == row && fc.searchResults.children.get(61) == text && fc.searchResults.children.get(62) == icon,
+      "The row, text and icon must occupy their fixed slots 60-62");
+    check(!row.hidden, "With nothing typed, the row must be visible");
 
     // -- Reuse: updating again for the SAME item must not create more widgets. --
     widget.update();
     check(fc.searchResults.createdChildren.size() == 3, "Repeated updates for the same item must reuse the same three widgets, not duplicate them");
 
+    // -- Another plugin (or the game rebuilding the list) takes over a slot: the row must come back. --
+    fc.searchResults.children.put(60, new EviLiveSuggestionTest.FakeWidget());
+    widget.update();
+    check(fc.searchResults.createdChildren.size() == 6, "A replaced slot must be noticed and the row recreated, not left detached and invisible");
+    row = fc.searchResults.createdChildren.get(3);
+    text = fc.searchResults.createdChildren.get(4);
+    icon = fc.searchResults.createdChildren.get(5);
+    check(icon.itemId == 1 && row.onOpArgs != null && (int) row.onOpArgs[1] == 1, "The recreated row must point at the suggested item again");
+    // Writes by index into the top line's slots (what Copilot does) must not disturb it.
+    fc.searchResults.children.put(0, new EviLiveSuggestionTest.FakeWidget());
+    fc.searchResults.children.put(3, new EviLiveSuggestionTest.FakeWidget());
+    widget.update();
+    check(fc.searchResults.createdChildren.size() == 6, "Writes to slots 0-3 must leave the row alone");
+
+    // -- Typing: the live results own that space, so the row hides, and returns when cleared. --
+    fc.typedSearch = "rune";
+    widget.update();
+    check(row.hidden && text.hidden && icon.hidden, "While a search is typed, the row must be hidden");
+    check(fc.searchResults.createdChildren.size() == 6, "Typing must not create anything");
+    fc.typedSearch = "";
+    widget.update();
+    check(!row.hidden && !text.hidden && !icon.hidden, "With the search box empty again, the row must be visible again");
+
     // -- Item change while still open: still exactly three widgets, but updated to the new item. --
     cache.set(EviLiveSuggestionTest.suggestion(2, "buy", 50, 200, 260));
     widget.update();
-    check(fc.searchResults.createdChildren.size() == 3, "A changed suggested item must update the existing three widgets, not create new ones");
+    check(fc.searchResults.createdChildren.size() == 6, "A changed suggested item must update the existing three widgets, not create new ones");
     check(row.onOpArgs != null && (int) row.onOpArgs[1] == 2, "The row's click target must switch to the new suggested item");
     check(icon.itemId == 2, "The icon must switch to the new suggested item");
 
@@ -108,12 +137,12 @@ public class EviLiveItemSelectWidgetTest {
     // eligibility (a different, not-yet-selected suggestion) must create a fresh set of widgets. --
     fc.currentItemId = 2;
     widget.update();
-    check(fc.searchResults.createdChildren.size() == 3, "Selecting the item must not itself create anything more");
+    check(fc.searchResults.createdChildren.size() == 6, "Selecting the item must not itself create anything more");
     fc.currentItemId = -1;
     cache.set(EviLiveSuggestionTest.suggestion(3, "buy", 20, 400, 480));
     widget.update();
-    check(fc.searchResults.createdChildren.size() == 6, "After the widget was cleared (item selected), a new eligible suggestion must create a fresh set of widgets");
+    check(fc.searchResults.createdChildren.size() == 9, "After the widget was cleared (item selected), a new eligible suggestion must create a fresh set of widgets");
 
-    System.out.println("PASS: gating on the display toggle, GE-slot-open, the quantity/price prompt, a cached suggestion, an already-selected item, and the search-results widget existing; exactly-three-widget creation wired with Flipping Copilot's own verified script/argument values; reuse across repeated updates and item changes; and fresh creation after a clear");
+    System.out.println("PASS: placement one row below the top line in fixed slots 60-62; recreation when a slot is taken over; untouched by writes to slots 0-3; hidden while typing and back when cleared; gating on the display toggle, GE-slot-open, the quantity/price prompt, a cached suggestion, an already-selected item, and the search-results widget existing; exactly-three-widget creation wired with Flipping Copilot's own verified script/argument values; reuse across repeated updates and item changes; and fresh creation after a clear");
   }
 }

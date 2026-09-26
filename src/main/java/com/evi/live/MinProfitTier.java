@@ -10,7 +10,7 @@ package com.evi.live;
  * the filter"), so an untouched config behaves exactly as before this setting existed.
  */
 public enum MinProfitTier {
-  AUTO, T100K, T200K, T500K, T1M, T2M;
+  AUTO, T100K, T200K, T500K, T1M, T2M, NONE;
 
   /** RuneLite's config UI renders enum dropdowns using toString(), so this is the visible label. */
   @Override public String toString() {
@@ -20,11 +20,21 @@ public enum MinProfitTier {
       case T500K: return "500k+";
       case T1M: return "1m+";
       case T2M: return "2m+";
+      // Appended after AUTO gained a small floor of its own: this is the way to say "really none".
+      case NONE: return "No minimum at all";
       default: return "Auto";
     }
   }
 
-  /** The gp floor to send as ?minProfit=, or 0 for AUTO (meaning: leave the query parameter off entirely). */
+  /**
+   * The gp floor to send as ?minProfit=, or 0 for AUTO (meaning: leave the query parameter off).
+   *
+   * AUTO is not "no floor": the bridge applies a small one of its own (500 gp) so that a player who
+   * has expressed no preference is not offered a trade worth 81 gp after tax, which is what
+   * happened on 26 Sept. NONE sends 1, the smallest positive floor there is, which the bridge reads
+   * as a deliberate choice and leaves alone -- the way to keep thin, high-volume flipping available
+   * to anyone whose cash stack depends on it.
+   */
   int gp() {
     switch (this) {
       case T100K: return 100000;
@@ -32,6 +42,7 @@ public enum MinProfitTier {
       case T500K: return 500000;
       case T1M: return 1000000;
       case T2M: return 2000000;
+      case NONE: return 1;
       default: return 0;
     }
   }

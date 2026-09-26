@@ -93,9 +93,9 @@ public final class EviLiveDeliveryTest {
       public String itemBlocklist(){return "4151, 995";}
       public RiskLevel riskLevel(){return RiskLevel.HIGH;}
       public boolean includeMarketSuggestions(){return true;}
-      public TradeDuration tradeDuration(){return TradeDuration.TEN;}
+      public TradePace tradePace(){return TradePace.FAST;}
     });
-    check("minProfit=500000&blocklist=4151,995&risk=high&includeMarket=1&duration=10".equals(suggestionQuery.invoke(tuned)),"All five settings must appear in the query string when set, includeMarket then duration last (cushion disabled here so this test stays about exactly those five)");
+    check("minProfit=500000&blocklist=4151,995&risk=high&includeMarket=1&duration=120".equals(suggestionQuery.invoke(tuned)),"All five settings must appear in the query string when set, includeMarket then duration last (cushion disabled here so this test stays about exactly those five)");
 
     // MinProfitTier: replaces the old free-form gp field with plain preset tiers, AUTO meaning
     // "any profit, no floor" -- must behave exactly like the old default of 0 (left off the query
@@ -153,24 +153,55 @@ public final class EviLiveDeliveryTest {
 
     EviLivePlugin noDurationPreference=new EviLivePlugin();
     set(noDurationPreference,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
-      public TradeDuration tradeDuration(){return TradeDuration.NONE;}
+      public TradePace tradePace(){return TradePace.NONE;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(noDurationPreference)),"Explicit NONE (no preference) must be left off the query, matching the default");
 
     EviLivePlugin durationOnly=new EviLivePlugin();
     set(durationOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
-      public TradeDuration tradeDuration(){return TradeDuration.SIXTY;}
+      public TradePace tradePace(){return TradePace.MEDIUM;}
       public boolean marginSafetyCushion(){return false;}
     });
-    check("duration=60".equals(suggestionQuery.invoke(durationOnly)),"duration=60 alone, with no leading '&', when it's the only tuned setting");
-    int[] longMinutes={120,240,480,720,1440};TradeDuration[] longOptions={TradeDuration.TWO_HOURS,TradeDuration.FOUR_HOURS,TradeDuration.EIGHT_HOURS,TradeDuration.TWELVE_HOURS,TradeDuration.DAY};
-    for(int i=0;i<longOptions.length;i++){
-      final TradeDuration d=longOptions[i];
+    check("duration=360".equals(suggestionQuery.invoke(durationOnly)),"duration alone, with no leading '&', when it's the only tuned setting");
+    // Every pace sends the minutes measured to actually complete a round trip: see TradePace's own
+    // doc and tools/hold-length.mjs. Nothing under two hours is offered, because nothing under two
+    // hours ever finished one.
+    int[] paceMinutes={120,360,720,2880};TradePace[] paces={TradePace.FAST,TradePace.MEDIUM,TradePace.OVERNIGHT,TradePace.SLOW};
+    for(int i=0;i<paces.length;i++){
+      final TradePace p=paces[i];
       EviLivePlugin longTrade=new EviLivePlugin();
-      set(longTrade,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}public TradeDuration tradeDuration(){return d;}});
-      check(("duration="+longMinutes[i]).equals(suggestionQuery.invoke(longTrade)),"Hour-plus trade durations must send their minutes: "+d);
+      set(longTrade,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}public TradePace tradePace(){return p;}});
+      check(("duration="+paceMinutes[i]).equals(suggestionQuery.invoke(longTrade)),"Each trade pace must send its own minutes: "+p);
+      check(p.minutes()>=120,"No pace may promise less than two hours, which never completed: "+p);
     }
+    // Where a suggestion may come from. The default is what EVI always did, so it sends nothing.
+    for(SuggestionSource src:SuggestionSource.values()){
+      final SuggestionSource v=src;
+      EviLivePlugin p=new EviLivePlugin();
+      set(p,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+        public SuggestionSource suggestionSource(){return v;}
+        public boolean marginSafetyCushion(){return false;}
+      });
+      String q=(String)suggestionQuery.invoke(p);
+      if(v==SuggestionSource.HISTORY_FIRST)check("".equals(q),"The default source must add nothing to the query: "+q);
+      else check(("source="+v.param()).equals(q),"Each source must send its own value: "+v+" -> "+q);
+    }
+    // The old setting is hidden and must no longer reach the query, whatever it still holds.
+    EviLivePlugin staleDuration=new EviLivePlugin();
+    set(staleDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public TradeDuration tradeDuration(){return TradeDuration.FIVE;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    check("".equals(suggestionQuery.invoke(staleDuration)),"A value left in the retired duration setting must have no effect at all");
+    // AUTO leaves the floor to the bridge (which applies a small one); NONE asks for none at all.
+    EviLivePlugin noFloor=new EviLivePlugin();
+    set(noFloor,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public MinProfitTier minProfitThreshold(){return MinProfitTier.NONE;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    check("minProfit=1".equals(suggestionQuery.invoke(noFloor)),"\"No minimum at all\" must send the smallest positive floor, so the bridge leaves it alone");
+    check(MinProfitTier.AUTO.gp()==0,"AUTO sends nothing and lets the bridge choose");
     // tradingProfile: STANDARD (the default) sends nothing; STARTER restricts market-wide picks to
     // untaxed items. See TradingProfile's own doc for the backtest behind it.
     EviLivePlugin starter=new EviLivePlugin();
@@ -202,6 +233,19 @@ public final class EviLiveDeliveryTest {
       });
       check(("stackShare="+chosen.percent()).equals(suggestionQuery.invoke(p)),"Each share option must send its own percentage: "+chosen);
     }
+    // focus=: the plugin's own Suggestion focus. "Same as scanner" (the default) sends nothing -- the
+    // untouched-config check above already proves that -- and each named focus sends its own value.
+    for(SuggestionFocus chosenFocus:new SuggestionFocus[]{SuggestionFocus.ALL_ITEMS,SuggestionFocus.GEAR,SuggestionFocus.BULK}){
+      final SuggestionFocus pick=chosenFocus;
+      EviLivePlugin p=new EviLivePlugin();
+      set(p,"config",new EviLiveConfig(){
+        public SuggestionFocus suggestionFocus(){return pick;}
+        public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
+        public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      });
+      check(("focus="+pick.param()).equals(suggestionQuery.invoke(p)),"Each focus must send its own value: "+pick);
+    }
+    check(SuggestionFocus.SAME_AS_SCANNER.param()==null,"Same as scanner must send nothing, leaving the scanner's switch in charge");
     // members=: which kind of world the player is on, so the bridge never suggests a members-only
     // item on a free-to-play world. Unknown (not yet logged in) must send nothing at all.
     EviLivePlugin worldPlugin=new EviLivePlugin();
@@ -288,12 +332,12 @@ public final class EviLiveDeliveryTest {
 
     EviLivePlugin forecastWithDuration=new EviLivePlugin();
     set(forecastWithDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
-      public TradeDuration tradeDuration(){return TradeDuration.THIRTY;}
+      public TradePace tradePace(){return TradePace.FAST;}
       public ForecastHorizon forecastHorizon(){return ForecastHorizon.OVERNIGHT;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
       public boolean marginSafetyCushion(){return false;}
     });
-    check("duration=30&forecast=overnight&onForecast=skip".equals(suggestionQuery.invoke(forecastWithDuration)),"forecast=/onForecast= must follow duration= in the query string, joined with '&' like every other setting here");
+    check("duration=120&forecast=overnight&onForecast=skip".equals(suggestionQuery.invoke(forecastWithDuration)),"forecast=/onForecast= must follow duration= in the query string, joined with '&' like every other setting here");
 
     // includeInventory/inventory: opt-in (EviLiveConfig.suggestIdleInventory()) plus the client-thread
     // inventoryQuantities snapshot (see refreshInventoryItemIds/its own field doc) -- both must be
@@ -499,6 +543,21 @@ public final class EviLiveDeliveryTest {
     check(EviLivePlugin.noSuggestionMessage(true,false,0,2).contains("market-wide"),"With finished offers waiting to be collected, ranking did happen, so the ordinary wording stands");
     check(EviLivePlugin.noSuggestionMessage(true,false,-1,-1).equals(EviLivePlugin.noSuggestionMessage(true,false)),"An unknown slot count must change nothing");
     check(EviLivePlugin.noSuggestionMessage(true,false,1,0).contains("market-wide"),"A free slot must change nothing");
+    // A new player with a small cash stack who sets a profit target out of its reach must be told
+    // that the target is the reason, and what is actually reachable -- otherwise the panel looks the
+    // same as a market with nothing in it, and they have no way to find out.
+    EviLivePlugin.Reachable reach=new EviLivePlugin.Reachable();
+    reach.name="Rune javelin tips";reach.profit=620016L;
+    String withReach=EviLivePlugin.reachableMessage(reach);
+    check(withReach.contains("Rune javelin tips")&&withReach.contains(String.format("%,d",620016L)),"The reachable message must name the trade and its figure: "+withReach);
+    check(withReach.contains("Lower the minimum"),"It must say what to do about it: "+withReach);
+    check(EviLivePlugin.reachableMessage(null).isEmpty(),"No reading means no message at all, never a vague hint");
+    EviLivePlugin.Reachable empty=new EviLivePlugin.Reachable();
+    check(EviLivePlugin.reachableMessage(empty).isEmpty(),"A reading with no figure adds nothing");
+    EviLivePlugin.Reachable loss=new EviLivePlugin.Reachable();loss.profit=-5L;loss.name="Anything";
+    check(EviLivePlugin.reachableMessage(loss).isEmpty(),"A losing trade is never offered as what is reachable");
+    EviLivePlugin.Reachable unnamed=new EviLivePlugin.Reachable();unnamed.profit=1000L;
+    check(EviLivePlugin.reachableMessage(unnamed).contains(String.format("%,d",1000L)),"A figure with no item name still reports the figure");
     // The sell-side reserve: a buy held back so the exits already owed still have somewhere to go.
     check(EviLivePlugin.sellReserveMessage(3).contains("3 items you're holding with no sell placed yet"),"The reserve message must say how many exits are owed");
     check(EviLivePlugin.sellReserveMessage(1).contains("1 item you're holding"),"and read correctly for a single one");
@@ -612,6 +671,23 @@ public final class EviLiveDeliveryTest {
     skipMethod.invoke(skipPlugin); // nothing cached now: must be a safe no-op, not throw or add anything
     check(skipPluginSkips.size()==1,"Calling skipSuggestion() again with nothing cached must not add anything or throw");
 
+    // blockSuggestion(): the sidebar's "Block this item" button. Same immediate session-local effect as
+    // Skip; the permanent part is the bridge POST, whose body must carry the item.
+    EviLivePlugin blockPlugin=new EviLivePlugin();
+    SuggestionCache blockCache=new SuggestionCache();
+    set(blockPlugin,"suggestionCache",blockCache);
+    Method blockMethod=EviLivePlugin.class.getDeclaredMethod("blockSuggestion");blockMethod.setAccessible(true);
+    blockCache.set(EviLiveSuggestionTest.suggestion(7,"buy",10,20,30));
+    blockMethod.invoke(blockPlugin); // sender is null here: must not throw
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> blockSkips=(java.util.Set<Integer>)get(blockPlugin,"skippedItemIds");
+    check(blockSkips.contains(7),"Block must exclude the item for this session at once");
+    check(blockCache.get()==null,"Block must clear the cached suggestion immediately");
+    EviLivePlugin.BlockRequest blockRequest=new EviLivePlugin.BlockRequest(7);
+    check(blockRequest.itemId==7 && blockRequest.blocked,"The block request must name the item and ask for it to be blocked");
+    blockMethod.invoke(blockPlugin); // nothing cached now: a safe no-op
+    check(blockSkips.size()==1,"Block with nothing cached must do nothing");
+
     // flagPersonalUse(): the sidebar's "Mark as personal use" button callback. The session-local
     // effects (skippedItemIds, clearing any live heldForResale entry, clearing suggestionCache) run
     // synchronously before the bridge POST/re-poll is handed to the (here, null -- startUp() never
@@ -631,10 +707,21 @@ public final class EviLiveDeliveryTest {
     EviLivePlugin noBuyIdFlagPlugin=new EviLivePlugin();
     SuggestionCache noBuyIdCache=new SuggestionCache();
     set(noBuyIdFlagPlugin,"suggestionCache",noBuyIdCache);
-    Suggestion sellNoBuyId=EviLiveSuggestionTest.suggestion(12,"sell",50,10,20); // buyId left null: no single buy identifiable
+    // A sell suggestion with no buyId is the idle-inventory tier: gear EVI only sees in the inventory
+    // and never watched being bought (a Masori body (f) worn while training Slayer, reported live).
+    // There is no purchase to mark, so the ITEM is excluded instead -- before this the button refused
+    // to mark anything and the same suggestion came straight back on the next poll.
+    Suggestion sellNoBuyId=EviLiveSuggestionTest.suggestion(12,"sell",50,10,20); // buyId left null
     noBuyIdCache.set(sellNoBuyId);
     flagMethod.invoke(noBuyIdFlagPlugin);
-    check(noBuyIdCache.get()!=null,"Personal use on a sell suggestion with no identifiable buyId must not clear the cache");
+    check(noBuyIdCache.get()==null,"Personal use on owned gear must clear the cache, so the same suggestion cannot return");
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> noBuyIdSkips=(java.util.Set<Integer>)get(noBuyIdFlagPlugin,"skippedItemIds");
+    check(noBuyIdSkips.contains(12),"Personal use on owned gear must exclude that item for this session too");
+    // The request body carries the item instead of a buy, which is what the bridge keys the exclusion by.
+    EviLivePlugin.PersonalUseRequest itemRequest=EviLivePlugin.PersonalUseRequest.forItem(12);
+    check(itemRequest.buyId==null && itemRequest.itemId!=null && itemRequest.itemId==12 && itemRequest.personal,
+      "An owned-gear exclusion must send itemId with no buyId");
 
     EviLivePlugin flagPlugin=new EviLivePlugin();
     SuggestionCache flagCache=new SuggestionCache();
@@ -838,9 +925,9 @@ public final class EviLiveDeliveryTest {
     // existing user. Changing names and tooltips is safe; this list must only ever grow.
     check(keyNames.equals(new java.util.TreeSet<>(java.util.Arrays.asList(
       "suggestionKeybind","showSuggestionHint","minProfitTier","itemBlocklist","riskLevel","includeMarketSuggestions",
-      "tradingProfile","maxTradeShare","tradeDuration","suggestIdleInventory","forecastHorizon","forecastPolicy","requireMarginAboveNoise"))),
+      "tradingProfile","maxTradeShare","tradeDuration","tradePace","suggestionSource","suggestIdleInventory","forecastHorizon","forecastPolicy","requireMarginAboveNoise","panelTheme","suggestionFocus"))),
       "A setting's keyName changed or disappeared, which would reset it for existing users: "+keyNames);
 
-    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion callback, the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion or a sell suggestion with no identifiable buyId; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter");
+    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
   }
 }

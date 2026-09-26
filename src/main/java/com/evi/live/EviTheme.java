@@ -38,6 +38,38 @@ final class EviTheme {
     return new Color(BRAND.getRed(), BRAND.getGreen(), BRAND.getBlue(), alpha);
   }
 
+  /** One sidebar colour scheme (see PanelTheme). The panel asks the active palette for every colour
+   *  it paints, so adding or changing a scheme never means hunting colours through the panel code.
+   *  RuneLite's own ColorScheme values are used for the default, which is what makes the panel look
+   *  like the rest of the client rather than a second gray scale invented here. */
+  static final class Palette {
+    final Color background, card, text, muted, accent, warn, buttonFace, buttonText, rule;
+    private Palette(Color background, Color card, Color text, Color muted, Color accent, Color warn,
+                    Color buttonFace, Color buttonText, Color rule) {
+      this.background = background; this.card = card; this.text = text; this.muted = muted;
+      this.accent = accent; this.warn = warn; this.buttonFace = buttonFace; this.buttonText = buttonText; this.rule = rule;
+    }
+  }
+
+  static final Palette RUNELITE = new Palette(
+    net.runelite.client.ui.ColorScheme.DARK_GRAY_COLOR, net.runelite.client.ui.ColorScheme.DARKER_GRAY_COLOR,
+    net.runelite.client.ui.ColorScheme.LIGHT_GRAY_COLOR, net.runelite.client.ui.ColorScheme.LIGHT_GRAY_COLOR,
+    BRAND, net.runelite.client.ui.ColorScheme.PROGRESS_INPROGRESS_COLOR,
+    net.runelite.client.ui.ColorScheme.DARKER_GRAY_COLOR, Color.WHITE,
+    net.runelite.client.ui.ColorScheme.MEDIUM_GRAY_COLOR);
+
+  /** The scanner's Old School scheme, to the same values: parchment on worn leather, OSRS gold. */
+  static final Palette OLD_SCHOOL = new Palette(
+    new Color(0x2b, 0x24, 0x1a), new Color(0x3a, 0x31, 0x24),
+    new Color(0xe8, 0xdc, 0xc0), new Color(0xb6, 0xa8, 0x88),
+    new Color(0xff, 0xb0, 0x00), new Color(0xff, 0xcf, 0x5c),
+    new Color(0x47, 0x3c, 0x2c), new Color(0xe8, 0xdc, 0xc0),
+    new Color(0x5a, 0x4a, 0x33));
+
+  private static volatile Palette active = RUNELITE;
+  static Palette palette() { return active; }
+  static void use(PanelTheme theme) { active = theme == PanelTheme.OLD_SCHOOL ? OLD_SCHOOL : RUNELITE; }
+
   /** BRAND_DARK at a given alpha, for painted-overlay backdrops (e.g. the item-picker row) --
    *  mostly-opaque navy instead of a generic black rectangle, so the backdrop itself reads as
    *  "EVI" rather than an unstyled box. */

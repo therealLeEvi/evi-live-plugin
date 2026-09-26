@@ -49,7 +49,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "itemBlocklist",
     name = "Item blocklist (item IDs)",
-    description = "Item IDs EVI should never suggest, separated by commas, e.g. 4151,995.",
+    description = "Item IDs never to suggest, e.g. 4151,995. Easier: the sidebar's Block this item button.",
     position = 4
   )
   default String itemBlocklist() {
@@ -101,11 +101,32 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "tradeDuration",
     name = "Target trade duration",
-    description = "Prefers trades that can finish within about this long. A rough estimate, not a guarantee.",
-    position = 7
+    description = "Replaced by Trade pace. Kept so nothing you chose is lost; it no longer has any effect.",
+    position = 7,
+    hidden = true
   )
   default TradeDuration tradeDuration() {
     return TradeDuration.NONE;
+  }
+
+  @ConfigItem(
+    keyName = "suggestionSource",
+    name = "Suggest from",
+    description = "Your own history first, the best of both, or the whole market ignoring your history.",
+    position = 6
+  )
+  default SuggestionSource suggestionSource() {
+    return SuggestionSource.HISTORY_FIRST;
+  }
+
+  @ConfigItem(
+    keyName = "tradePace",
+    name = "Trade pace",
+    description = "How long you will wait for one trade. Under two hours, round trips rarely finish.",
+    position = 7
+  )
+  default TradePace tradePace() {
+    return TradePace.NONE;
   }
 
   @ConfigItem(
@@ -166,6 +187,29 @@ public interface EviLiveConfig extends Config {
   )
   default boolean marginSafetyCushion() {
     return false;
+  }
+
+  // Colours only: nothing about what is suggested, warned about or sent depends on this. Default is
+  // the look the panel has always had, so an existing player sees no change unless they pick one.
+  @ConfigItem(
+    keyName = "panelTheme",
+    name = "Panel colours",
+    description = "Colours for EVI's sidebar: RuneLite's own, or the scanner's Old School parchment.",
+    position = 12
+  )
+  default PanelTheme panelTheme() {
+    return PanelTheme.RUNELITE;
+  }
+
+  // Default follows the scanner's own Focus switch, so an existing player sees no change.
+  @ConfigItem(
+    keyName = "suggestionFocus",
+    name = "Suggestion focus",
+    description = "Which items EVI suggests buying: gear, bulk consumables and ammo, or all. Sales are unaffected.",
+    position = 13
+  )
+  default SuggestionFocus suggestionFocus() {
+    return SuggestionFocus.SAME_AS_SCANNER;
   }
 
 }

@@ -14,6 +14,7 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
@@ -37,37 +38,73 @@ import net.runelite.client.ui.PluginPanel;
 final class EviLivePanel extends PluginPanel {
   private final JTextArea status = bodyText("Waiting for setup.");
   private final JTextArea suggestion = bodyText("No suggestion yet.");
+  // Held so suggestionWarning can recolour its accent stripe, exactly as an offer row carries its own.
+  private JPanel suggestionCard;
+  // Whether the current suggestion would lose GP, kept so a theme switch repaints the right stripe.
+  private volatile boolean warned;
   private final JTextArea offerHint = bodyText("");
+  private final JTextArea profitLine = bodyText("Waiting for the bridge.");
   private final JPanel offerList = new JPanel();
 
+  // What a component is, so applyTheme can repaint it: "bg" panel background, "card" a raised card,
+  // "accent" EVI-coloured text, "text" body text, "muted" a section heading, "button", "field",
+  // "rule" a separator, "stripe" the suggestion card's accent border.
+  private static final String ROLE = "eviRole";
+  private static <T extends JComponent> T role(T c, String role) { c.putClientProperty(ROLE, role); return c; }
+
   EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld) {
+    this(pair, skip, personalUse, notHeld, () -> { }, () -> { });
+  }
+
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block) {
+    this(pair, skip, personalUse, notHeld, block, () -> { });
+  }
+
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block, Runnable resetProfit) {
     setLayout(new BorderLayout());
-    setBackground(ColorScheme.DARK_GRAY_COLOR);
+    role(this, "bg");
 
     JPanel content = new JPanel();
     content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
-    content.setBackground(ColorScheme.DARK_GRAY_COLOR);
+    role(content, "bg");
     content.setBorder(BorderFactory.createEmptyBorder(12, 10, 12, 10));
 
     // -- About --
     JLabel title = new JLabel("EVI Live · Local");
     title.setFont(FontManager.getRunescapeBoldFont());
-    title.setForeground(EviTheme.BRAND);
+    role(title, "accent");
     title.setAlignmentX(Component.LEFT_ALIGNMENT);
     content.add(title);
     content.add(bodyText("Observes Grand Exchange offers only. You place and manage every offer yourself."));
     content.add(status);
 
-    // -- Current suggestion, set off as its own card so it reads the same way the item-picker
-    // overlay's own backdrop does (dark navy behind the brand-teal suggestion text). --
+    // -- Current suggestion, styled exactly like an Active offers row below (see renderOffers):
+    // RuneLite's own darker-gray card with a coloured stripe down the left edge, body text in the
+    // client's standard light gray. It used to be dark navy with brand-teal body text, which made
+    // the one card the player reads most the only part of the sidebar that did not look like the
+    // rest of the client. The stripe keeps EVI's teal, and turns orange for a sale that would lose
+    // GP right now -- the same colour an offer row uses for its own in-progress state. --
+    // -- Realised profit since the count began, with a Reset. Deliberately the bridge's own matched-flip
+    // total, the same number the scanner shows, and it says what it leaves out rather than rounding the
+    // story: unmatched sales and unsold purchases are not profit. --
+    content.add(section());
+    content.add(sectionHeader("Profit since counting began"));
+    profitLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+    content.add(profitLine);
+    JButton resetButton = secondaryButton("Reset profit count");
+    resetButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+    resetButton.getAccessibleContext().setAccessibleDescription("Starts this profit line counting from now. Your trade records, flips and the scanner's own total are untouched.");
+    resetButton.addActionListener(e -> resetProfit.run());
+    content.add(Box.createVerticalStrut(6));
+    content.add(resetButton);
+
     content.add(section());
     JLabel suggestionLabel = sectionHeader("Current suggestion");
     content.add(suggestionLabel);
-    JPanel suggestionCard = new JPanel(new BorderLayout());
+    suggestionCard = new JPanel(new BorderLayout());
     suggestionCard.setAlignmentX(Component.LEFT_ALIGNMENT);
-    suggestionCard.setBackground(EviTheme.BRAND_DARK);
-    suggestionCard.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
-    suggestion.setForeground(EviTheme.BRAND);
+    role(suggestionCard, "card");
+    role(suggestion, "text");
     suggestion.setFont(FontManager.getRunescapeSmallFont());
     suggestion.setOpaque(false);
     suggestionCard.add(suggestion, BorderLayout.CENTER);
@@ -76,8 +113,16 @@ final class EviLivePanel extends PluginPanel {
     skipButton.setAlignmentX(Component.LEFT_ALIGNMENT);
     skipButton.getAccessibleContext().setAccessibleDescription("Excludes the current suggestion and checks for the next-best one. Does not affect any offer you've already placed.");
     skipButton.addActionListener(e -> skip.run());
+    // Block is Skip made permanent: asked for so a player who never wants an item suggested again
+    // can say so in one click, instead of looking up its item ID for the blocklist setting.
+    JButton blockButton = secondaryButton("Block this item");
+    blockButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+    blockButton.getAccessibleContext().setAccessibleDescription("Never suggest buying this item again. Undo it in the scanner's Blocked items list. Stock you already hold still gets its sell reminder.");
+    blockButton.addActionListener(e -> block.run());
     content.add(Box.createVerticalStrut(6));
     content.add(skipButton);
+    content.add(Box.createVerticalStrut(6));
+    content.add(blockButton);
     JButton personalUseButton = secondaryButton("Mark as personal use");
     personalUseButton.setAlignmentX(Component.LEFT_ALIGNMENT);
     personalUseButton.getAccessibleContext().setAccessibleDescription("For a \"you're holding this, sell it\" suggestion: marks this one purchase as bought for your own use, not a flip. It won't be suggested again and won't count toward profit if sold. Only this purchase -- buying this item again later is unaffected.");
@@ -154,9 +199,61 @@ final class EviLivePanel extends PluginPanel {
     return true;
   }
 
-  /** Orange suggestion text for a sell that would lose GP right now; brand teal otherwise. */
+  /** An orange stripe and orange text for a sell that would lose GP right now; the usual teal stripe
+   *  and light-gray text otherwise. The text colour still changes as well as the stripe: a losing
+   *  sale is the one thing here the player must not skim past. */
   void suggestionWarning(boolean loss) {
-    SwingUtilities.invokeLater(() -> suggestion.setForeground(loss ? ColorScheme.PROGRESS_INPROGRESS_COLOR : EviTheme.BRAND));
+    warned = loss;
+    SwingUtilities.invokeLater(() -> {
+      EviTheme.Palette p = EviTheme.palette();
+      suggestion.putClientProperty(ROLE, loss ? "warn" : "text");
+      suggestion.setForeground(loss ? p.warn : p.text);
+      if (suggestionCard != null) suggestionCard.setBorder(suggestionBorder(loss ? p.warn : p.accent));
+    });
+  }
+
+  /** Repaints every component this panel owns in the chosen scheme (see PanelTheme). Called once at
+   *  construction and again whenever the setting changes, so switching schemes never needs the panel
+   *  rebuilt or the client restarted. Components are found by the role they were tagged with rather
+   *  than by being held in fields: the offer rows and the suggestion card are rebuilt constantly, and
+   *  a list of references would go stale every poll. EDT only. */
+  void applyTheme(PanelTheme theme) {
+    SwingUtilities.invokeLater(() -> {
+      EviTheme.use(theme);
+      paintTree(this);
+      if (suggestionCard != null) suggestionCard.setBorder(suggestionBorder(warned ? EviTheme.palette().warn : EviTheme.palette().accent));
+      revalidate();
+      repaint();
+    });
+  }
+
+  private static void paintTree(Component c) {
+    if (c instanceof JComponent) {
+      EviTheme.Palette p = EviTheme.palette();
+      JComponent jc = (JComponent) c;
+      Object role = jc.getClientProperty(ROLE);
+      if ("bg".equals(role)) jc.setBackground(p.background);
+      else if ("card".equals(role)) jc.setBackground(p.card);
+      else if ("accent".equals(role)) jc.setForeground(p.accent);
+      else if ("sell".equals(role)) jc.setForeground(ColorScheme.GRAND_EXCHANGE_PRICE);
+      else if ("text".equals(role)) jc.setForeground(p.text);
+      else if ("muted".equals(role)) jc.setForeground(p.muted);
+      else if ("warn".equals(role)) jc.setForeground(p.warn);
+      else if ("field".equals(role)) { jc.setBackground(p.card); jc.setForeground(p.text); }
+      else if ("button".equals(role) || "primary".equals(role)) {
+        jc.setBackground(p.buttonFace);
+        jc.setForeground(p.buttonText);
+        if ("primary".equals(role)) jc.setBorder(new CompoundBorder(
+          BorderFactory.createLineBorder(p.accent), BorderFactory.createEmptyBorder(5, 9, 5, 9)));
+      }
+    }
+    if (c instanceof java.awt.Container) for (Component child : ((java.awt.Container) c).getComponents()) paintTree(child);
+  }
+
+  /** The Active offers row's own border: a 3px accent stripe on the left, then padding. */
+  private static javax.swing.border.Border suggestionBorder(Color accent) {
+    return new CompoundBorder(BorderFactory.createMatteBorder(0, 3, 0, 0, accent),
+      BorderFactory.createEmptyBorder(6, 6, 6, 8));
   }
 
   void offerHint(String message) {
@@ -168,6 +265,34 @@ final class EviLivePanel extends PluginPanel {
   }
 
   /** Replaces the Active offers list with one row per occupied GE slot. Safe from any thread. */
+  /** The bridge's realised-profit figure, or null when it could not be read this poll. EDT only. */
+  void profit(EviLivePlugin.Profit p) {
+    SwingUtilities.invokeLater(() -> {
+      if (p == null) { setIfChanged(profitLine, "Profit unavailable -- the bridge did not answer."); return; }
+      StringBuilder text = new StringBuilder();
+      text.append(p.gp >= 0 ? "+" : "").append(String.format("%,d", p.gp)).append(" gp");
+      text.append(p.since == null ? " (everything EVI has matched" : " (since you reset");
+      text.append(", ").append(p.trades).append(p.trades == 1 ? " trade" : " trades");
+      if (p.winners + p.losers > 0) text.append(": ").append(p.winners).append(" up, ").append(p.losers).append(" down");
+      text.append(")");
+      // What the figure is not: a running tally of the cash stack. Said every time, because it is the
+      // difference between a total a player can trust and one they quietly stop believing.
+      if (p.unmatchedSales > 0 || p.openPositions > 0) {
+        text.append("\nNot counted: ");
+        if (p.unmatchedSales > 0) text.append(p.unmatchedSales).append(" sale").append(p.unmatchedSales == 1 ? "" : "s").append(" EVI never saw bought");
+        if (p.unmatchedSales > 0 && p.openPositions > 0) text.append(", ");
+        if (p.openPositions > 0) text.append(p.openPositions).append(" purchase").append(p.openPositions == 1 ? "" : "s").append(" not yet sold");
+        text.append(".");
+      }
+      setIfChanged(profitLine, text.toString());
+    });
+  }
+
+  /** Immediate feedback on the Reset click; the real figure arrives with the next poll. */
+  void profitResetPending() {
+    SwingUtilities.invokeLater(() -> setIfChanged(profitLine, "Counting from now..."));
+  }
+
   void offers(List<EviLivePlugin.OfferRow> rows) {
     List<EviLivePlugin.OfferRow> snapshot = rows == null ? Collections.emptyList() : rows;
     SwingUtilities.invokeLater(() -> renderOffers(snapshot));
@@ -221,16 +346,16 @@ final class EviLivePanel extends PluginPanel {
       : ColorScheme.PROGRESS_INPROGRESS_COLOR;
     JPanel card = new JPanel(new BorderLayout());
     card.setAlignmentX(Component.LEFT_ALIGNMENT);
-    card.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+    role(card, "card");
     card.setBorder(new CompoundBorder(
       BorderFactory.createMatteBorder(0, 3, 0, 0, accent),
       BorderFactory.createEmptyBorder(4, 6, 4, 6)));
     JLabel title = new JLabel(offerTitle(row));
     title.setFont(FontManager.getRunescapeSmallFont());
-    title.setForeground(row.buying ? EviTheme.BRAND : ColorScheme.GRAND_EXCHANGE_PRICE);
+    role(title, row.buying ? "accent" : "sell");
     JLabel detail = new JLabel(offerDetail(row));
     detail.setFont(FontManager.getRunescapeSmallFont());
-    detail.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+    role(detail, "text");
     card.add(title, BorderLayout.NORTH);
     card.add(detail, BorderLayout.SOUTH);
     int height = card.getPreferredSize().height;
@@ -249,7 +374,8 @@ final class EviLivePanel extends PluginPanel {
     rule.setOpaque(false);
     rule.setBorder(BorderFactory.createCompoundBorder(
       BorderFactory.createEmptyBorder(10, 0, 10, 0),
-      BorderFactory.createMatteBorder(1, 0, 0, 0, ColorScheme.MEDIUM_GRAY_COLOR)));
+      BorderFactory.createMatteBorder(1, 0, 0, 0, EviTheme.palette().rule)));
+    role(rule, "rule");
     rule.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
     return rule;
   }
@@ -257,7 +383,7 @@ final class EviLivePanel extends PluginPanel {
   private static JLabel sectionHeader(String value) {
     JLabel label = new JLabel(value);
     label.setFont(FontManager.getRunescapeBoldFont());
-    label.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+    role(label, "muted");
     label.setAlignmentX(Component.LEFT_ALIGNMENT);
     label.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 0));
     return label;
@@ -275,7 +401,7 @@ final class EviLivePanel extends PluginPanel {
     field.setLineWrap(true);
     field.setWrapStyleWord(true);
     field.setOpaque(false);
-    field.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+    role(field, "text");
     field.setFont(FontManager.getRunescapeSmallFont());
     field.setAlignmentX(Component.LEFT_ALIGNMENT);
     field.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
@@ -287,8 +413,7 @@ final class EviLivePanel extends PluginPanel {
     JButton button = new JButton(text);
     button.setFocusPainted(false);
     button.setFont(FontManager.getRunescapeSmallFont());
-    button.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-    button.setForeground(Color.WHITE);
+    role(button, "button");
     button.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
     return button;
   }
@@ -297,9 +422,7 @@ final class EviLivePanel extends PluginPanel {
    *  brand color so it stands out from the plain secondary button below. */
   private static JButton primaryButton(String text) {
     JButton button = flatButton(text);
-    button.setBorder(new CompoundBorder(
-      BorderFactory.createLineBorder(EviTheme.BRAND),
-      BorderFactory.createEmptyBorder(5, 9, 5, 9)));
+    role(button, "primary");
     return button;
   }
 
