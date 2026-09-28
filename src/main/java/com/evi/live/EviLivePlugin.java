@@ -237,13 +237,14 @@ public class EviLivePlugin extends Plugin {
     salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit);
+      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit,this::clearSkips);
       panel.applyTheme(config.panelTheme());
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
     if(SwingUtilities.isEventDispatchThread())createPanel.run();else SwingUtilities.invokeAndWait(createPanel);
     status(pairingStatus);
+    refreshPairingVisibility();
     reset();
     suggestionKeybindHandler.register();
     overlayManager.add(searchHighlightOverlay);
@@ -270,6 +271,9 @@ public class EviLivePlugin extends Plugin {
     reset();
   }
   private void status(String message){if(panel!=null)panel.status(message);}
+  /** Setup that is finished costs the 225px sidebar room it needs for the pick, so the pairing
+   *  fields go away once a key is held and come back if it is ever cleared. */
+  private void refreshPairingVisibility(){if(panel!=null)panel.paired(pluginKey!=null&&!pluginKey.isEmpty());}
   private void pair(String entered) {
     try {
       final long generation=lifecycle;
@@ -280,6 +284,7 @@ public class EviLivePlugin extends Plugin {
         synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
         reset();
         status("Pairing saved. Log in; connection is checked when the first snapshot is sent.");
+        refreshPairingVisibility();
       });
     }catch(IllegalArgumentException ex){status(ex.getMessage());}
     catch(Exception ex){status("Could not save the key. Check write access to .runelite/plugin-data/evi-live.");}
@@ -629,6 +634,13 @@ public class EviLivePlugin extends Plugin {
         :noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots)
           +reachableMessage(r==null?null:r.reachable);
       updatePanelSuggestion(s,s==null?diagnosis:null);
+      // The session list is what shapes everything above it; kept on screen so it is never the
+      // invisible reason a suggestion looks poor.
+      if(panel!=null)panel.skipped(skippedItemIds.size());
+      // The second and third positions, when asked for. An older bridge sends none and the section
+      // stays hidden; so does a default install, which never asks for more than one.
+      if(panel!=null)panel.alsoSuggested(r==null||r.additional==null
+        ?java.util.Collections.emptyList():java.util.Arrays.asList(r.additional));
       if(panel!=null)panel.profit(r==null?null:r.profit);
       updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice);
     } catch(Throwable ex){
@@ -648,6 +660,23 @@ public class EviLivePlugin extends Plugin {
   // currently shown item from ranking for the rest of this session and immediately re-polls
   // rather than waiting up to 2s for the next scheduled tick, so the button feels responsive.
   // Never touches the game itself -- purely which suggestion gets shown/filled next.
+  /** Puts back everything this session has set aside, and re-polls so the effect is immediate.
+   *
+   *  The session list is cumulative, and until 28 Sept 2026 it was invisible and one-way: Skip,
+   *  Block, "Mark as personal use", "I don't have this anymore" and the stale-holding re-check all
+   *  feed it, and it cleared only on a profile change or a client restart. Working down from a
+   *  441,621 gp pick to one worth a few hundred looked like a ranking failure, and was really an
+   *  accumulated filter with nothing on screen admitting it existed.
+   *
+   *  Deliberately does NOT touch the bridge's permanent blocklist: an item blocked there stays
+   *  blocked and is undone from the scanner's Blocked items list, as before. This only undoes what
+   *  this client session did to itself. */
+  private void clearSkips() {
+    skippedItemIds.clear();
+    if(panel!=null)panel.skipped(0);
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
+  }
+
   private void skipSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
@@ -788,6 +817,14 @@ public class EviLivePlugin extends Plugin {
     if(focus!=null && focus.param()!=null){if(q.length()>0)q.append('&');q.append("focus=").append(focus.param());}
     SuggestionSource source=config.suggestionSource();
     if(source!=null && source.param()!=null){if(q.length()>0)q.append('&');q.append("source=").append(source.param());}
+    // Only sent when it is above one, so a default install's request is byte-identical to before and
+    // an older bridge (which ignores the parameter anyway) is never sent something it has no answer
+    // for. The bridge caps it at 3 regardless of what arrives.
+    // Only sent when it is not the default, so a default install's request is byte-identical.
+    PositionSizing sizing=config.positionSizing();
+    if(sizing!=null && sizing.param()!=null){if(q.length()>0)q.append('&');q.append("sizing=").append(sizing.param());}
+    MaxPositions positions=config.maxPositions();
+    if(positions!=null && positions.count()>1){if(q.length()>0)q.append('&');q.append("maxSuggestions=").append(positions.count());}
     // Trade pace replaced the old minute-labelled durations on 26 Sept: measured over 60 days,
     // nothing under two hours ever completed a round trip inside its own window. The old setting is
     // hidden and no longer read.
@@ -976,6 +1013,14 @@ public class EviLivePlugin extends Plugin {
   static String reachableMessage(Reachable r) {
     if(r==null||r.profit==null||r.profit<=0)return "";
     String item=r.name==null||r.name.isEmpty()?"the best trade EVI can see":r.name;
+    // Name the setting to pick, when the bridge worked one out. Before 28 Sept 2026 this figure came
+    // from one ranking pass with the floor removed, which answered a different question and could
+    // understate the ceiling several-fold; the bridge now probes the same rungs this dropdown offers,
+    // so the number it returns is reachable at a setting the player can actually select. An older
+    // bridge sends no `atMinimum` and gets the original sentence, unchanged.
+    if(r.atMinimum!=null&&r.atMinimum>1)
+      return String.format(" Your minimum profit is what is filtering everything out: set it to %,d gp"
+        +" and the best this cash stack can do right now is %s, at about %,d gp.",r.atMinimum,item,r.profit);
     return String.format(" Your minimum profit is what is filtering everything out: the best this cash stack"
       +" can do right now is %s, at about %,d gp. Lower the minimum to see trades like it.",item,r.profit);
   }
@@ -987,7 +1032,10 @@ public class EviLivePlugin extends Plugin {
     String warning=s.sellsAtLoss()
       ?String.format("LOSS if sold now: about %,d gp.%s ",s.lossIfSoldNow,s.breakEvenPrice==null?"":String.format(" Break-even: %,d gp.",s.breakEvenPrice))
       :"";
-    panel.suggestion(warning+String.format("%s x%,d — buy %,d gp / sell %,d gp%s",s.name,s.quantity,s.buyPrice,s.sellPrice,s.reasoning==null||s.reasoning.isEmpty()?"":" — "+s.reasoning));
+    // The same sentence as before, kept as the fallback the panel shows whenever the bridge sends no
+    // verdict -- an older bridge, or a pick nothing was measured about. Where there IS one, the panel
+    // draws the card instead and this prose never appears.
+    panel.suggestion(s,warning+String.format("%s x%,d — buy %,d gp / sell %,d gp%s",s.name,s.quantity,s.buyPrice,s.sellPrice,s.reasoning==null||s.reasoning.isEmpty()?"":" — "+s.reasoning));
     panel.suggestionWarning(s.sellsAtLoss());
   }
   // How far an active offer's own set price may drift from today's market (buyPrice for a buy
@@ -1051,14 +1099,12 @@ public class EviLivePlugin extends Plugin {
   // simply skips any offer with no match.
   private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice) {
     if(panel==null)return;
-    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.offerHint(null);return;}
-    StringBuilder combined=new StringBuilder();
-    // Shown first: an offer that has been sitting is the thing most worth acting on, and the
-    // sentence already carries the market price and the break-even floor.
+    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
+    java.util.List<AdviceCard> cards=new java.util.ArrayList<>();
+    // Shown first: an offer that has been sitting is the thing most worth acting on.
     if(relistAdvice!=null)for(RelistAdvice advice:relistAdvice) {
       if(advice==null || advice.message==null || advice.message.isEmpty())continue;
-      if(combined.length()>0)combined.append("\n\n");
-      combined.append(advice.message);
+      cards.add(new AdviceCard(advice.level,advice.label,advice.name,advice.figures,advice.message));
     }
     for(ActiveOffer o:offers) {
       Suggestion price=null;
@@ -1067,10 +1113,16 @@ public class EviLivePlugin extends Plugin {
       if(slotFill!=null)for(OfferFillEstimate f:slotFill)if(f!=null && f.itemId==o.itemId){fill=f;break;}
       String priceHint=offerDriftHint(o,price);
       String fillHint=offerFillHint(o,fill);
-      if(priceHint!=null){if(combined.length()>0)combined.append("\n\n");combined.append(priceHint);}
-      if(fillHint!=null){if(combined.length()>0)combined.append("\n\n");combined.append(fillHint);}
+      // The sentences are unchanged and still carry every figure; the card is a short way in, and the
+      // sentence is one hover away. A drift the player can act on for free is the cheaper warning, so
+      // a buy priced under the market reads as caution rather than as something going wrong.
+      if(priceHint!=null)cards.add(new AdviceCard("caution",
+        o.buying?"Priced under market":"Priced over market",o.name,
+        price==null?null:String.format("%,d yours \u00b7 %,d market",o.price,o.buying?price.buyPrice:price.sellPrice),
+        priceHint));
+      if(fillHint!=null)cards.add(new AdviceCard("caution","May not fill in time",o.name,null,fillHint));
     }
-    panel.offerHint(combined.length()>0?combined.toString():null);
+    panel.advice(cards);
   }
   static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;
       // See capture(): ticks between first seeing this offer unfilled and its first fill, or -1 when
@@ -1097,12 +1149,12 @@ public class EviLivePlugin extends Plugin {
   // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
   // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
   // get matched back up against activeOffers by itemId.
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;Profit profit;Reachable reachable;}
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] additional;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;Profit profit;Reachable reachable;}
   // Sent only when there is nothing to suggest AND a minimum profit is set: the best trade the
   // market actually offers at this cash stack, so "nothing" can say why instead of looking broken.
   // It is a statement of what exists, not a recommendation -- it has been through none of EVI's
   // checks, and the wording below never tells anyone to buy it.
-  static final class Reachable {String name;Integer itemId;Long profit;}
+  static final class Reachable {String name;Integer itemId;Long profit,atMinimum;}
   // Realised profit since the player last pressed Reset (or since EVI's first matched trade), computed by
   // the bridge from matched flips only -- see profitSince in bridge/server.mjs. unmatchedSales and
   // openPositions are what that total deliberately leaves out, shown beside it rather than folded in: a
@@ -1117,7 +1169,16 @@ public class EviLivePlugin extends Plugin {
   // bridge from its own journal (see bridge/relist.mjs). `message` is already a complete, hedged
   // sentence naming the market price and, when the cost basis is known, the break-even price; the
   // plugin only displays it. Nothing here relists, cancels or edits anything -- the player does.
-  static final class RelistAdvice {int itemId;String name,message;boolean belowBreakEven;}
+  static final class RelistAdvice {int itemId;String name,message,level,label,figures;boolean belowBreakEven;}
+  /** One line of advice about an offer already placed, as something the sidebar can draw rather than a
+   *  paragraph to read. `message` is the full sentence and stays as the tooltip, so making the card
+   *  small costs no explanation. `label` absent means an older bridge: the panel shows the sentence. */
+  static final class AdviceCard {
+    final String level, label, name, figures, message;
+    AdviceCard(String level, String label, String name, String figures, String message) {
+      this.level=level; this.label=label; this.name=name; this.figures=figures; this.message=message;
+    }
+  }
   // One entry per in-progress offer the bridge could judge against the player's own "Target trade
   // duration" setting -- see estimateOfferFill in suggestions.mjs for exactly what this is (a rough
   // volume-based estimate from the OSRS Wiki API's own last-hour trading data, never a fill

@@ -44,10 +44,16 @@ final class EviTheme {
    *  like the rest of the client rather than a second gray scale invented here. */
   static final class Palette {
     final Color background, card, text, muted, accent, warn, buttonFace, buttonText, rule;
+    /** For the suggestion card's verdict: a check that passed, and one that failed. `warn` already
+     *  covers "worth knowing", so these are its two ends -- green for clear, red for a stated loss.
+     *  Both are toned per palette rather than shared, because RuneLite's bright green on the Old
+     *  School parchment reads as a different product. */
+    final Color good, bad;
     private Palette(Color background, Color card, Color text, Color muted, Color accent, Color warn,
-                    Color buttonFace, Color buttonText, Color rule) {
+                    Color buttonFace, Color buttonText, Color rule, Color good, Color bad) {
       this.background = background; this.card = card; this.text = text; this.muted = muted;
       this.accent = accent; this.warn = warn; this.buttonFace = buttonFace; this.buttonText = buttonText; this.rule = rule;
+      this.good = good; this.bad = bad;
     }
   }
 
@@ -56,7 +62,8 @@ final class EviTheme {
     net.runelite.client.ui.ColorScheme.LIGHT_GRAY_COLOR, net.runelite.client.ui.ColorScheme.LIGHT_GRAY_COLOR,
     BRAND, net.runelite.client.ui.ColorScheme.PROGRESS_INPROGRESS_COLOR,
     net.runelite.client.ui.ColorScheme.DARKER_GRAY_COLOR, Color.WHITE,
-    net.runelite.client.ui.ColorScheme.MEDIUM_GRAY_COLOR);
+    net.runelite.client.ui.ColorScheme.MEDIUM_GRAY_COLOR,
+    net.runelite.client.ui.ColorScheme.PROGRESS_COMPLETE_COLOR, net.runelite.client.ui.ColorScheme.PROGRESS_ERROR_COLOR);
 
   /** The scanner's Old School scheme, to the same values: parchment on worn leather, OSRS gold. */
   static final Palette OLD_SCHOOL = new Palette(
@@ -64,7 +71,8 @@ final class EviTheme {
     new Color(0xe8, 0xdc, 0xc0), new Color(0xb6, 0xa8, 0x88),
     new Color(0xff, 0xb0, 0x00), new Color(0xff, 0xcf, 0x5c),
     new Color(0x47, 0x3c, 0x2c), new Color(0xe8, 0xdc, 0xc0),
-    new Color(0x5a, 0x4a, 0x33));
+    new Color(0x5a, 0x4a, 0x33),
+    new Color(0x8a, 0xb0, 0x4e), new Color(0xc4, 0x5c, 0x3c));
 
   private static volatile Palette active = RUNELITE;
   static Palette palette() { return active; }

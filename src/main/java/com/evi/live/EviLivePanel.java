@@ -38,6 +38,35 @@ import net.runelite.client.ui.PluginPanel;
 final class EviLivePanel extends PluginPanel {
   private final JTextArea status = bodyText("Waiting for setup.");
   private final JTextArea suggestion = bodyText("No suggestion yet.");
+  /** The signature of the card currently drawn, or null when the plain paragraph is showing.
+   *  Stops the two-second poll relaying out the sidebar when nothing about the pick has changed. */
+  private String shownCard = null;
+  /** Everything to do with pairing, kept together so it can be hidden in one move once a key is saved. */
+  private final JPanel pairingSection = new JPanel();
+  /** A six-pixel square beside the status line: green when the bridge answered, the warn colour when it
+   *  has not. Read from the message itself rather than a second signal, because every caller already
+   *  writes one and the alternative was an overload on a method used from a dozen places. */
+  private final JPanel connectionDot = new JPanel();
+  /** How many items this session has set aside, and the way to get them back. Hidden at zero.
+   *
+   *  It exists because the list was invisible and one-way. Every Skip, Block, "Mark as personal use"
+   *  and "I don't have this anymore" adds to it, as does a stale holding EVI re-checks and drops, and
+   *  it only ever cleared on a profile change or a client restart. On 28 Sept 2026 novi worked down
+   *  from a 441,621 gp 3rd Age robe to a Blighted teleport spell sack worth a few hundred, and the
+   *  cause was not the ranking or any floor -- it was that everything better had quietly been set
+   *  aside earlier in the session, with nothing on screen saying so or offering it back. */
+  private final JLabel skipCount = new JLabel();
+  private final JButton clearSkipsButton;
+  private final Runnable clearSkips;
+  /** Further positions, when the player has asked for more than one. Empty and hidden by default. */
+  private final JPanel alsoList = new JPanel();
+  private final JLabel alsoHeader = sectionHeader("Also worth buying");
+  /** What the list currently shows, so a poll that changes nothing does not relayout the sidebar. */
+  private String shownAlso = "";
+  /** The advice about offers already placed, one small card each. */
+  private final JPanel adviceList = new JPanel();
+  /** What the list currently shows, so a poll that changes nothing does not relayout the sidebar. */
+  private String shownAdvice = "";
   // Held so suggestionWarning can recolour its accent stripe, exactly as an offer row carries its own.
   private JPanel suggestionCard;
   // Whether the current suggestion would lose GP, kept so a theme switch repaints the right stripe.
@@ -61,6 +90,12 @@ final class EviLivePanel extends PluginPanel {
   }
 
   EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block, Runnable resetProfit) {
+    this(pair, skip, personalUse, notHeld, block, resetProfit, () -> { });
+  }
+
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
+               Runnable resetProfit, Runnable clearSkips) {
+    this.clearSkips = clearSkips;
     setLayout(new BorderLayout());
     role(this, "bg");
 
@@ -75,8 +110,11 @@ final class EviLivePanel extends PluginPanel {
     role(title, "accent");
     title.setAlignmentX(Component.LEFT_ALIGNMENT);
     content.add(title);
-    content.add(bodyText("Observes Grand Exchange offers only. You place and manage every offer yourself."));
-    content.add(status);
+    // The "observes only / you place every offer" line used to sit here. It is the plugin's own
+    // description on the Hub listing and the first line of its README, so the sidebar was the third
+    // place saying it -- and on a 225px panel those two lines cost more room than they were worth.
+    // The connection state moved to the bottom (see the status strip at the end of this method): it is
+    // something to glance at when EVI goes quiet, not something to read past on the way to the pick.
 
     // -- Current suggestion, styled exactly like an Active offers row below (see renderOffers):
     // RuneLite's own darker-gray card with a coloured stripe down the left edge, body text in the
@@ -136,6 +174,37 @@ final class EviLivePanel extends PluginPanel {
     content.add(Box.createVerticalStrut(6));
     content.add(notHeldButton);
 
+    // What this session has set aside, and the way back. Hidden entirely at zero, so it costs nothing
+    // on screen until it is the thing actually shaping what EVI can offer.
+    skipCount.setFont(FontManager.getRunescapeSmallFont());
+    skipCount.setAlignmentX(Component.LEFT_ALIGNMENT);
+    skipCount.setVisible(false);
+    role(skipCount, "muted");
+    content.add(Box.createVerticalStrut(6));
+    content.add(skipCount);
+    clearSkipsButton = secondaryButton("Show skipped items again");
+    clearSkipsButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+    clearSkipsButton.setVisible(false);
+    clearSkipsButton.getAccessibleContext().setAccessibleDescription(
+      "Clears everything you have skipped, blocked for this session, or marked as personal use, so EVI can suggest those items again. Blocked items stay blocked; this only undoes the session's own list.");
+    clearSkipsButton.addActionListener(e -> clearSkips.run());
+    content.add(Box.createVerticalStrut(4));
+    content.add(clearSkipsButton);
+
+    // -- Also worth buying: the second and third positions, when the player has asked for more than
+    // one ("Suggestions at once"). Deliberately BELOW the buttons above, so Skip, Block and the rest
+    // read as belonging to the primary card they sit under, which is the only one they act on.
+    // Hidden entirely at the default of one, so nothing about this panel changes for anyone who has
+    // not gone looking for it. --
+    alsoHeader.setVisible(false);
+    content.add(alsoHeader);
+    alsoList.setLayout(new BoxLayout(alsoList, BoxLayout.Y_AXIS));
+    alsoList.setOpaque(false);
+    alsoList.setAlignmentX(Component.LEFT_ALIGNMENT);
+    alsoList.setVisible(false);
+    role(alsoList, "bg");
+    content.add(alsoList);
+
     // -- Active offers: one row per occupied GE slot (see offers()), so everything sitting in the
     // GE is visible at a glance, followed by any cancel/relist or slow-fill hint for those offers
     // (see EviLivePlugin.offerDriftHint/offerFillHint), hidden when there's nothing to flag. Text
@@ -151,11 +220,23 @@ final class EviLivePanel extends PluginPanel {
     offerHint.setForeground(ColorScheme.PROGRESS_INPROGRESS_COLOR);
     offerHint.setVisible(false);
     content.add(offerHint);
+    adviceList.setLayout(new BoxLayout(adviceList, BoxLayout.Y_AXIS));
+    adviceList.setOpaque(false);
+    adviceList.setAlignmentX(Component.LEFT_ALIGNMENT);
+    role(adviceList, "bg");
+    content.add(adviceList);
 
-    // -- Pairing --
-    content.add(section());
-    content.add(sectionHeader("Pairing"));
-    content.add(bodyText("Start the EVI bridge, then paste its RuneLite plugin key below. This is not your Scanner key or Jagex login."));
+    // -- Pairing. One section rather than loose children, so it can be taken away entirely once the
+    // key is saved: it is setup, and setup that is done is just room the sidebar no longer has. The
+    // fields stay built and are only hidden, so clearing a key puts them back without rebuilding. --
+    pairingSection.setLayout(new BoxLayout(pairingSection, BoxLayout.Y_AXIS));
+    pairingSection.setOpaque(false);
+    pairingSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+    role(pairingSection, "bg");
+    content.add(pairingSection);
+    pairingSection.add(section());
+    pairingSection.add(sectionHeader("Pairing"));
+    pairingSection.add(bodyText("Start the EVI bridge, then paste its RuneLite plugin key below. This is not your Scanner key or Jagex login."));
     JPasswordField key = new JPasswordField(20);
     key.setAlignmentX(Component.LEFT_ALIGNMENT);
     key.setMaximumSize(new Dimension(Integer.MAX_VALUE, key.getPreferredSize().height));
@@ -166,7 +247,7 @@ final class EviLivePanel extends PluginPanel {
     key.setBorder(new CompoundBorder(
       BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
       BorderFactory.createEmptyBorder(4, 6, 4, 6)));
-    content.add(key);
+    pairingSection.add(key);
     JButton save = primaryButton("Save pairing key");
     save.setAlignmentX(Component.LEFT_ALIGNMENT);
     save.addActionListener(e -> {
@@ -174,19 +255,334 @@ final class EviLivePanel extends PluginPanel {
       try { pair.accept(new String(entered)); }
       finally { Arrays.fill(entered, '\0'); key.setText(""); }
     });
-    content.add(Box.createVerticalStrut(6));
-    content.add(save);
-    content.add(bodyText("Saved only on this PC. Destination: 127.0.0.1:51743. No account password, chat, or inventory is collected."));
+    pairingSection.add(Box.createVerticalStrut(6));
+    pairingSection.add(save);
+    pairingSection.add(bodyText("Saved only on this PC. Destination: 127.0.0.1:51743. No account password, chat, or inventory is collected."));
+
+    // -- The status strip, last on purpose. What EVI is doing is worth a glance when it goes quiet; it
+    // is not worth the top of the panel every time you look for a trade. --
+    content.add(section());
+    JPanel strip = new JPanel(new BorderLayout(6, 0));
+    strip.setOpaque(false);
+    strip.setAlignmentX(Component.LEFT_ALIGNMENT);
+    role(strip, "bg");
+    connectionDot.setPreferredSize(new Dimension(6, 6));
+    connectionDot.setMaximumSize(new Dimension(6, 6));
+    connectionDot.setOpaque(true);
+    strip.add(connectionDot, BorderLayout.WEST);
+    strip.add(status, BorderLayout.CENTER);
+    content.add(strip);
 
     add(content, BorderLayout.NORTH);
   }
 
   void status(String message) {
-    SwingUtilities.invokeLater(() -> setIfChanged(status, message));
+    SwingUtilities.invokeLater(() -> {
+      setIfChanged(status, message);
+      EviTheme.Palette p = EviTheme.palette();
+      connectionDot.setBackground(message != null && message.startsWith("Connected") ? p.good : p.warn);
+      connectionDot.repaint();
+    });
+  }
+
+  /** How many items this session has set aside. Zero hides the line and the button entirely.
+   *
+   *  Worth stating on screen rather than only in the request, because the list is cumulative, it is
+   *  fed by four buttons and one automatic path, and until 28 Sept 2026 nothing revealed it: a player
+   *  who had skipped their way down to a worthless suggestion had no way to tell that was why, and no
+   *  way back short of restarting the client. EDT only. */
+  void skipped(int count) {
+    SwingUtilities.invokeLater(() -> {
+      boolean any = count > 0;
+      // Cleared rather than merely hidden at zero, so nothing stale is left behind a hidden label for
+      // a screen reader or a future caller to pick up.
+      skipCount.setText(!any ? "" : count == 1 ? "1 item set aside this session" : count + " items set aside this session");
+      skipCount.setVisible(any);
+      clearSkipsButton.setVisible(any);
+      skipCount.revalidate();
+      skipCount.repaint();
+    });
+  }
+
+  /** The second and third positions, when the player has asked for more than one.
+   *
+   *  Drawn smaller and plainer than the primary card on purpose. These are not alternatives to it and
+   *  not a plan for the whole stack: each was ranked on the cash the ones before it left unspent, and
+   *  each passed the same checks, so the order is the order to buy them in. The Skip and Block buttons
+   *  sit above this list and act only on the primary, which is why the list is placed below them.
+   *
+   *  An empty or absent list hides the section completely, so the default of one suggestion leaves the
+   *  panel exactly as it was. EDT only. */
+  void alsoSuggested(java.util.List<Suggestion> extras) {
+    SwingUtilities.invokeLater(() -> {
+      StringBuilder sig = new StringBuilder();
+      if (extras != null) for (Suggestion s : extras)
+        if (s != null) sig.append(s.itemId).append('|').append(s.quantity).append('|')
+          .append(s.buyPrice).append('|').append(s.expectedProfit).append(';');
+      if (sig.toString().equals(shownAlso)) return;
+      shownAlso = sig.toString();
+
+      alsoList.removeAll();
+      boolean any = extras != null && !extras.isEmpty();
+      alsoHeader.setVisible(any);
+      alsoList.setVisible(any);
+      if (any) {
+        EviTheme.Palette p = EviTheme.palette();
+        int n = 1;
+        for (Suggestion s : extras) {
+          if (s == null) continue;
+          JPanel card = new JPanel();
+          card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+          card.setAlignmentX(Component.LEFT_ALIGNMENT);
+          role(card, "card");
+          card.setBorder(new CompoundBorder(
+            BorderFactory.createMatteBorder(0, 3, 0, 0, p.muted),
+            BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+          if (s.reasoning != null && !s.reasoning.isEmpty()) card.setToolTipText(s.reasoning);
+
+          JLabel name = new JLabel((++n) + ". " + (s.name == null ? "" : s.name));
+          name.setFont(FontManager.getRunescapeSmallFont());
+          name.setForeground(p.text);
+          name.setAlignmentX(Component.LEFT_ALIGNMENT);
+          card.add(name);
+
+          if (s.quantity > 0 && s.buyPrice > 0) {
+            JLabel line = new JLabel(String.format("Buy %,d at %,d gp", s.quantity, s.buyPrice));
+            line.setFont(FontManager.getRunescapeSmallFont());
+            line.setForeground(p.muted);
+            line.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(line);
+          }
+          if (s.expectedProfit != null) {
+            JLabel profit = new JLabel((s.expectedProfit >= 0 ? "+" : "") + String.format("%,d", s.expectedProfit));
+            profit.setFont(FontManager.getRunescapeSmallFont());
+            profit.setForeground(s.expectedProfit >= 0 ? p.good : p.bad);
+            profit.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(profit);
+          }
+          // The same verdict the primary card carries. An extra position that nobody checked would be
+          // the weakest card on the panel wearing the same clothes as the strongest.
+          if (s.verdict != null && s.verdict.label != null && !s.verdict.label.isEmpty()) {
+            JLabel v = new JLabel(s.verdict.label.toUpperCase());
+            v.setFont(FontManager.getRunescapeSmallFont());
+            v.setForeground("warn".equals(s.verdict.level) ? p.bad
+              : "caution".equals(s.verdict.level) ? p.warn : p.good);
+            v.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(v);
+          }
+          alsoList.add(Box.createVerticalStrut(6));
+          alsoList.add(card);
+        }
+      }
+      alsoList.revalidate();
+      alsoList.repaint();
+    });
+  }
+
+  /** Advice about offers already placed, as small cards rather than one paragraph.
+   *
+   *  These used to be concatenated into a single text area with blank lines between them: four full
+   *  sentences, each carrying every figure, stacked under Active offers. On a 225px panel that is a
+   *  wall. Each is now a coloured edge, the item, a few words and one line of figures -- and the whole
+   *  sentence is the tooltip, so nothing is lost, it is just one hover away instead of always there.
+   *
+   *  A card with no label came from a bridge older than this and is drawn as its sentence, the way it
+   *  always was. EDT only. */
+  void advice(java.util.List<EviLivePlugin.AdviceCard> cards) {
+    SwingUtilities.invokeLater(() -> {
+      StringBuilder sig = new StringBuilder();
+      if (cards != null) for (EviLivePlugin.AdviceCard c : cards)
+        sig.append(c.level).append(c.label).append(c.name).append(c.figures).append(c.message).append('|');
+      if (sig.toString().equals(shownAdvice)) return;
+      shownAdvice = sig.toString();
+
+      adviceList.removeAll();
+      if (cards == null || cards.isEmpty()) {
+        adviceList.setVisible(false);
+        adviceList.revalidate();
+        adviceList.repaint();
+        return;
+      }
+      adviceList.setVisible(true);
+      EviTheme.Palette p = EviTheme.palette();
+      for (EviLivePlugin.AdviceCard c : cards) {
+        if (c == null) continue;
+        if (c.label == null || c.label.isEmpty()) {          // older bridge: the sentence, as before
+          JTextArea plain = bodyText(c.message == null ? "" : c.message);
+          plain.setAlignmentX(Component.LEFT_ALIGNMENT);
+          adviceList.add(Box.createVerticalStrut(6));
+          adviceList.add(plain);
+          continue;
+        }
+        Color edge = "warn".equals(c.level) ? p.bad : p.warn;
+        JPanel card = new JPanel();
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        role(card, "card");
+        card.setBorder(new CompoundBorder(
+          BorderFactory.createMatteBorder(0, 3, 0, 0, edge),
+          BorderFactory.createEmptyBorder(6, 8, 6, 8)));
+        // The full sentence, one hover away. It is the same text the scanner shows.
+        card.setToolTipText(c.message);
+
+        JLabel name = new JLabel(c.name == null ? "" : c.name);
+        name.setFont(FontManager.getRunescapeSmallFont());
+        name.setForeground(p.text);
+        name.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(name);
+
+        JLabel label = new JLabel(c.label.toUpperCase());
+        label.setFont(FontManager.getRunescapeSmallFont());
+        label.setForeground(edge);
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.add(label);
+
+        if (c.figures != null && !c.figures.isEmpty()) {
+          JLabel figures = new JLabel(c.figures);
+          figures.setFont(FontManager.getRunescapeSmallFont());
+          figures.setForeground(p.muted);
+          figures.setAlignmentX(Component.LEFT_ALIGNMENT);
+          card.add(figures);
+        }
+        adviceList.add(Box.createVerticalStrut(6));
+        adviceList.add(card);
+      }
+      adviceList.revalidate();
+      adviceList.repaint();
+    });
+  }
+
+  /** Hides the pairing fields once a key is saved, and brings them back if it is ever cleared. The
+   *  sidebar is 225px wide and setup that is finished is the cheapest thing on it to give up. */
+  void paired(boolean paired) {
+    SwingUtilities.invokeLater(() -> {
+      if (pairingSection.isVisible() == !paired) return;
+      pairingSection.setVisible(!paired);
+      pairingSection.revalidate();
+      pairingSection.repaint();
+    });
   }
 
   void suggestion(String message) {
-    SwingUtilities.invokeLater(() -> setIfChanged(suggestion, message == null || message.isEmpty() ? "No suggestion yet." : message));
+    SwingUtilities.invokeLater(() -> {
+      showProse();
+      setIfChanged(suggestion, message == null || message.isEmpty() ? "No suggestion yet." : message);
+    });
+  }
+
+  /** The suggestion as a card rather than a paragraph.
+   *
+   *  The sidebar used to state a number and bury whether EVI trusted it. On 28 September 2026 a player
+   *  bought 30 Contract of Glyphic Attenuation expecting the 2,977,560 gp the quoted spread implied; it
+   *  was worth about 350,000, and EVI knew -- it had demoted the pick and said so, in the middle of a
+   *  paragraph. The figure was visible and the doubt was not.
+   *
+   *  So the doubt gets a shape: a coloured edge, a few words of verdict, the headline profit, and the
+   *  checks as short lines. `prose` is the reasoning that used to be the whole card; it is still what
+   *  gets shown when the bridge sends no verdict, which is how this stays compatible with a bridge
+   *  older than it. EDT only. */
+  void suggestion(Suggestion s, String prose) {
+    SwingUtilities.invokeLater(() -> {
+      if (s == null || s.verdict == null || s.verdict.checks == null || s.verdict.checks.isEmpty()) {
+        showProse();
+        setIfChanged(suggestion, prose == null || prose.isEmpty() ? "No suggestion yet." : prose);
+        return;
+      }
+      // The poll re-sends the same pick every two seconds. Rebuilding the card each time would relayout
+      // the sidebar for nothing, the same reason setIfChanged exists for the text areas.
+      String signature = cardSignature(s);
+      if (signature.equals(shownCard)) return;
+      shownCard = signature;
+      buildCard(s);
+      suggestionCard.revalidate();
+      suggestionCard.repaint();
+    });
+  }
+
+  private static String cardSignature(Suggestion s) {
+    StringBuilder b = new StringBuilder();
+    b.append(s.itemId).append('|').append(s.quantity).append('|').append(s.buyPrice).append('|')
+      .append(s.sellPrice).append('|').append(s.expectedProfit).append('|').append(s.action).append('|')
+      .append(s.verdict.level).append('|').append(s.verdict.label);
+    for (Suggestion.Check c : s.verdict.checks) b.append('|').append(c.ok).append(c.text);
+    return b.toString();
+  }
+
+  /** Puts the plain reasoning paragraph back, undoing any card built over it. */
+  private void showProse() {
+    if (shownCard == null) return;
+    shownCard = null;
+    suggestionCard.removeAll();
+    suggestionCard.setBorder(cardPadding());
+    suggestionCard.add(suggestion, BorderLayout.CENTER);
+    suggestionCard.revalidate();
+    suggestionCard.repaint();
+  }
+
+  private static CompoundBorder cardPadding() {
+    return new CompoundBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0),
+      BorderFactory.createEmptyBorder(8, 8, 8, 8));
+  }
+
+  private void buildCard(Suggestion s) {
+    EviTheme.Palette p = EviTheme.palette();
+    Color edge = "clear".equals(s.verdict.level) ? p.good
+      : "warn".equals(s.verdict.level) ? p.bad : p.warn;
+
+    suggestionCard.removeAll();
+    suggestionCard.setLayout(new BoxLayout(suggestionCard, BoxLayout.Y_AXIS));
+    // The coloured edge IS the verdict at a glance; the words beside it are for when that is not enough.
+    suggestionCard.setBorder(new CompoundBorder(
+      BorderFactory.createMatteBorder(0, 3, 0, 0, edge),
+      BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+
+    JPanel head = new JPanel(new BorderLayout());
+    head.setOpaque(false);
+    head.setAlignmentX(Component.LEFT_ALIGNMENT);
+    JLabel what = new JLabel(("sell".equals(s.action) ? "SELL " : "BUY ") + String.format("%,d", s.quantity));
+    what.setFont(FontManager.getRunescapeSmallFont());
+    what.setForeground(p.muted);
+    JLabel verdict = new JLabel(s.verdict.label == null ? "" : s.verdict.label.toUpperCase());
+    verdict.setFont(FontManager.getRunescapeSmallFont());
+    verdict.setForeground(edge);
+    head.add(what, BorderLayout.WEST);
+    head.add(verdict, BorderLayout.EAST);
+    suggestionCard.add(head);
+
+    JLabel name = new JLabel(s.name == null ? "" : s.name);
+    name.setFont(FontManager.getRunescapeBoldFont());
+    name.setForeground(p.text);
+    name.setAlignmentX(Component.LEFT_ALIGNMENT);
+    suggestionCard.add(Box.createVerticalStrut(3));
+    suggestionCard.add(name);
+
+    if (s.expectedProfit != null) {
+      JLabel profit = new JLabel((s.expectedProfit >= 0 ? "+" : "") + String.format("%,d", s.expectedProfit));
+      profit.setFont(FontManager.getRunescapeBoldFont());
+      profit.setForeground(s.expectedProfit >= 0 ? p.good : p.bad);
+      profit.setAlignmentX(Component.LEFT_ALIGNMENT);
+      suggestionCard.add(Box.createVerticalStrut(2));
+      suggestionCard.add(profit);
+    }
+
+    JLabel prices = new JLabel(String.format("%,d → %,d", s.buyPrice, s.sellPrice));
+    prices.setFont(FontManager.getRunescapeSmallFont());
+    prices.setForeground(p.muted);
+    prices.setAlignmentX(Component.LEFT_ALIGNMENT);
+    suggestionCard.add(Box.createVerticalStrut(2));
+    suggestionCard.add(prices);
+
+    suggestionCard.add(Box.createVerticalStrut(5));
+    for (Suggestion.Check c : s.verdict.checks) {
+      if (c == null || c.text == null) continue;
+      // A mark as well as a colour: colour alone is not a distinction everyone can see, and these lines
+      // carry the reason a pick is or is not trustworthy.
+      String mark = Boolean.TRUE.equals(c.ok) ? "✓ " : Boolean.FALSE.equals(c.ok) ? "! " : "· ";
+      JTextArea line = bodyText(mark + c.text);
+      line.setForeground(Boolean.FALSE.equals(c.ok) ? edge : p.muted);
+      line.setAlignmentX(Component.LEFT_ALIGNMENT);
+      suggestionCard.add(line);
+    }
   }
 
   /** Rewrites a text area only when its text actually differs. The poll re-sends the same text every

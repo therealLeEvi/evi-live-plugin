@@ -45,6 +45,28 @@ class Suggestion {
   // total GP lost. Shown as a warning; a losing sell is never hidden or blocked.
   Integer breakEvenPrice;
   Long lossIfSoldNow;
+  /** What the whole trade is worth after tax, computed by the bridge so the panel does not have to
+   *  know the Grand Exchange's tax rules to print the headline figure. Null from an older bridge. */
+  Long expectedProfit;
+  /** What EVI makes of its own pick, as something the sidebar can draw rather than prose to read
+   *  (bridge/verdict.mjs). Null when nothing was measured, or when the bridge predates it -- either
+   *  way the panel falls back to the reasoning paragraph, so old and new versions still agree. */
+  Verdict verdict;
+
+  /** Deliberately a summary of checks that already ran, never a new judgement: every line restates a
+   *  figure the bridge had already computed. */
+  static class Verdict {
+    /** "clear", "caution" or "warn". Anything else is treated as caution rather than trusted. */
+    String level;
+    String label;
+    java.util.List<Check> checks;
+  }
+
+  static class Check {
+    /** TRUE passed, FALSE failed, null neither -- a stated figure like a break-even price. */
+    Boolean ok;
+    String text;
+  }
 
   boolean sellsAtLoss() {
     return "sell".equals(action) && lossIfSoldNow != null && lossIfSoldNow > 0;

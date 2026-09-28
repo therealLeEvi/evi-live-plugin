@@ -558,6 +558,22 @@ public final class EviLiveDeliveryTest {
     check(EviLivePlugin.reachableMessage(loss).isEmpty(),"A losing trade is never offered as what is reachable");
     EviLivePlugin.Reachable unnamed=new EviLivePlugin.Reachable();unnamed.profit=1000L;
     check(EviLivePlugin.reachableMessage(unnamed).contains(String.format("%,d",1000L)),"A figure with no item name still reports the figure");
+    // With a rung the bridge actually probed, the message names the setting to pick rather than
+    // saying "lower it" and leaving the player to guess how far. On 28 Sept 2026 the old wording sat
+    // on top of a figure computed by removing the floor entirely, which reported 66,000 while 439,020
+    // was available one rung down -- so naming the rung is also what keeps the number honest.
+    EviLivePlugin.Reachable rung=new EviLivePlugin.Reachable();
+    rung.name="Twisted relic hunter (t3) armour set";rung.profit=439020L;rung.atMinimum=200000L;
+    String withRung=EviLivePlugin.reachableMessage(rung);
+    check(withRung.contains(String.format("%,d",200000L)),"It must name the setting to pick: "+withRung);
+    check(withRung.contains(String.format("%,d",439020L))&&withRung.contains("Twisted relic hunter"),"...and still name the trade and figure: "+withRung);
+    check(!withRung.contains("Lower the minimum"),"Naming the rung replaces the vague instruction: "+withRung);
+    // An older bridge sends no rung and must keep the original sentence rather than a broken one.
+    EviLivePlugin.Reachable noRung=new EviLivePlugin.Reachable();noRung.name="Rune javelin tips";noRung.profit=620016L;
+    check(EviLivePlugin.reachableMessage(noRung).contains("Lower the minimum"),"A bridge with no rung keeps the original wording");
+    // minProfit=1 is MinProfitTier.NONE, which is "no minimum at all" rather than a number to set.
+    EviLivePlugin.Reachable none=new EviLivePlugin.Reachable();none.name="Anything";none.profit=900L;none.atMinimum=1L;
+    check(EviLivePlugin.reachableMessage(none).contains("Lower the minimum"),"The NONE rung is not a figure to tell anyone to type in");
     // The sell-side reserve: a buy held back so the exits already owed still have somewhere to go.
     check(EviLivePlugin.sellReserveMessage(3).contains("3 items you're holding with no sell placed yet"),"The reserve message must say how many exits are owed");
     check(EviLivePlugin.sellReserveMessage(1).contains("1 item you're holding"),"and read correctly for a single one");
@@ -925,7 +941,8 @@ public final class EviLiveDeliveryTest {
     // existing user. Changing names and tooltips is safe; this list must only ever grow.
     check(keyNames.equals(new java.util.TreeSet<>(java.util.Arrays.asList(
       "suggestionKeybind","showSuggestionHint","minProfitTier","itemBlocklist","riskLevel","includeMarketSuggestions",
-      "tradingProfile","maxTradeShare","tradeDuration","tradePace","suggestionSource","suggestIdleInventory","forecastHorizon","forecastPolicy","requireMarginAboveNoise","panelTheme","suggestionFocus"))),
+      "tradingProfile","maxTradeShare","tradeDuration","tradePace","suggestionSource","suggestIdleInventory","forecastHorizon","forecastPolicy","requireMarginAboveNoise","panelTheme","suggestionFocus",
+      "maxPositions","positionSizing"))),
       "A setting's keyName changed or disappeared, which would reset it for existing users: "+keyNames);
 
     System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
