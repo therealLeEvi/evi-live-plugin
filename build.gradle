@@ -15,14 +15,21 @@ repositories {
 //     the same name, which is a poor pin for something going through Hub review.
 // Pinned exactly rather than '+', so the build never drifts to whatever is newest. Move it forward
 // deliberately when a newer release is out.
-def runeLiteVersion = '1.12.39'
+//
+// MATCH plugin-hub/runelite.version, ALWAYS. The Plugin Hub compiles every plugin against the
+// version IT pins, not the one declared here, so a green build locally proves nothing about the
+// Hub's. On 28 Sept 2026 the Hub moved to 1.13.0 while this said 1.12.39, and 3.9.0 passed every
+// local check and then failed the Hub's build: 1.13.0 widened GrandExchangeOffer.getPrice() and
+// getSpent() from int to long. Read it before any release:
+//     curl -s https://raw.githubusercontent.com/runelite/plugin-hub/master/runelite.version
+def runeLiteVersion = '1.13.0'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.9.0'
+version = '3.9.1'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

@@ -10,8 +10,8 @@ public class EviLiveObservationTest {
     public int getQuantitySold(){return filled;}
     public int getItemId(){return 1;}
     public int getTotalQuantity(){return 10;}
-    public int getPrice(){return 100;}
-    public int getSpent(){return filled*100;}
+    public long getPrice(){return 100;}
+    public long getSpent(){return (long)filled*100;}
     public GrandExchangeOfferState getState(){return state;}
   }
   static void check(boolean value,String message){if(!value)throw new AssertionError(message);}

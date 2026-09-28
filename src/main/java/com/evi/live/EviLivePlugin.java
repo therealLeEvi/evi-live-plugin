@@ -202,8 +202,8 @@ public class EviLivePlugin extends Plugin {
     // can say whether selling right now is a profit or a loss, instead of a plain "sell near X gp"
     // that reads identically either way. See suggestionQuery() and computeHoldingSuggestion's own
     // doc in suggestions.mjs for the exact failure this exists to fix.
-    final int itemId,quantity,price;final String name,offerId;
-    Held(int itemId,int quantity,String name,String offerId,int price){this.itemId=itemId;this.quantity=quantity;this.name=name;this.offerId=offerId;this.price=price;}
+    final int itemId,quantity;final long price;final String name,offerId;
+    Held(int itemId,int quantity,String name,String offerId,long price){this.itemId=itemId;this.quantity=quantity;this.name=name;this.offerId=offerId;this.price=price;}
   }
 
   @Provides
@@ -1124,7 +1124,13 @@ public class EviLivePlugin extends Plugin {
     }
     panel.advice(cards);
   }
-  static class Offer {int slot,itemId,price,total,filled,spent;String offerId,state,name="";boolean knownStart;
+  // price and spent are LONG, not int. RuneLite 1.13.0 widened GrandExchangeOffer.getPrice() and
+  // getSpent() to long, and the Plugin Hub compiles every plugin against the version it pins -- so
+  // this is not optional, and 3.9.0 failed its build check on exactly these two fields. Widening
+  // rather than casting down is the point: an int truncates silently past 2,147,483,647, and a
+  // wrong GP figure that looks plausible is the worst failure this project has. The offer total for
+  // a large order can reach that range, which is presumably why the API moved.
+  static class Offer {int slot,itemId,total,filled;long price,spent;String offerId,state,name="";boolean knownStart;
       // See capture(): ticks between first seeing this offer unfilled and its first fill, or -1 when
       // not known. startTick is local bookkeeping and is not sent to the bridge.
       transient int startTick=-1;int ticksToFill=-1;}
@@ -1134,15 +1140,15 @@ public class EviLivePlugin extends Plugin {
   // (see slots[]'s own doc), which is fine for slots[] (client-thread-only) but this one specifically
   // needs a cross-thread-safe reference, exactly like activeSlotItemIds just above it.
   static final class ActiveOffer {
-    final int itemId,price,remaining;final boolean buying;final String name;
-    ActiveOffer(int itemId,int price,boolean buying,String name,int remaining){this.itemId=itemId;this.price=price;this.buying=buying;this.name=name;this.remaining=remaining;}
+    final int itemId,remaining;final long price;final boolean buying;final String name;
+    ActiveOffer(int itemId,long price,boolean buying,String name,int remaining){this.itemId=itemId;this.price=price;this.buying=buying;this.name=name;this.remaining=remaining;}
   }
   // Immutable per-slot snapshot for the sidebar's "Active offers" list (see geOfferRows). state is
   // the raw GrandExchangeOfferState name (BUYING, SOLD, CANCELLED_BUY, ...); EviLivePanel turns it
   // into display text.
   static final class OfferRow {
-    final int slot,itemId,price,filled,total;final boolean buying;final String name,state;
-    OfferRow(int slot,int itemId,int price,int filled,int total,boolean buying,String name,String state){this.slot=slot;this.itemId=itemId;this.price=price;this.filled=filled;this.total=total;this.buying=buying;this.name=name;this.state=state;}
+    final int slot,itemId,filled,total;final long price;final boolean buying;final String name,state;
+    OfferRow(int slot,int itemId,long price,int filled,int total,boolean buying,String name,String state){this.slot=slot;this.itemId=itemId;this.price=price;this.filled=filled;this.total=total;this.buying=buying;this.name=name;this.state=state;}
   }
   // slotPrices reuses Suggestion the same way openItemPrice already does just above it -- the
   // bridge's GET /api/suggestion sends each entry as {itemId,buyPrice,sellPrice} (see
