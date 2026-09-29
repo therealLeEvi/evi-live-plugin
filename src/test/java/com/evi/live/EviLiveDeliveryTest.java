@@ -367,6 +367,60 @@ public final class EviLiveDeliveryTest {
     set(inventoryOn,"inventoryQuantities",snapshot);
     check("includeInventory=1&inventory=995:50000000,4151:1,30810:11".equals(suggestionQuery.invoke(inventoryOn)),"Inventory items must be sent sorted by item ID for a deterministic query string");
 
+    // ...but never from inside an instance. Reported by novi from inside a raid on 28 Sept 2026: EVI
+    // was offering to sell their supplies and raid gear, because to this tier an inventory is just an
+    // inventory. In a raid it is a loadout, and the Grand Exchange cannot be reached from in there
+    // anyway, so the suggestion could not be acted on even if it had been right.
+    java.lang.reflect.InvocationHandler worldView=(pr,m,ar)->m.getName().equals("isInstance")?Boolean.TRUE:null;
+    java.lang.reflect.InvocationHandler inRaid=(pr,m,ar)->m.getName().equals("getTopLevelWorldView")
+      ?java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.WorldView.class.getClassLoader(),new Class[]{net.runelite.api.WorldView.class},worldView):null;
+    EviLivePlugin inventoryInRaid=new EviLivePlugin();
+    set(inventoryInRaid,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public boolean suggestIdleInventory(){return true;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    set(inventoryInRaid,"inventoryQuantities",snapshot);
+    set(inventoryInRaid,"client",java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.Client.class.getClassLoader(),new Class[]{net.runelite.api.Client.class},inRaid));
+    // Two steps, and both are checked, because the bug this replaced was entirely in the first one:
+    // the flag is CAPTURED on the client thread (refreshInInstance, called from onGameTick) and only
+    // READ by suggestionQuery, which runs on the background sender. Testing the read alone would
+    // have passed just as happily while the client was being touched from the wrong thread.
+    java.lang.reflect.Method refreshInInstance=EviLivePlugin.class.getDeclaredMethod("refreshInInstance");
+    refreshInInstance.setAccessible(true);
+    refreshInInstance.invoke(inventoryInRaid);
+    check(Boolean.TRUE.equals(get(inventoryInRaid,"inInstance")),"refreshInInstance must capture the world view's own answer");
+    check("".equals(suggestionQuery.invoke(inventoryInRaid)),"Inside an instance the idle-inventory tier must send nothing: a raid loadout is not idle stock");
+    // And suggestionQuery must read the captured flag, never the client: blanking the client here
+    // would throw if anything on this path still reached for it.
+    set(inventoryInRaid,"client",null);
+    check("".equals(suggestionQuery.invoke(inventoryInRaid)),"suggestionQuery must use the captured flag, not touch the client off the client thread");
+
+    // Outside one it is unchanged, so the fix suppresses the raid case and nothing else.
+    java.lang.reflect.InvocationHandler openWorld=(pr,m,ar)->m.getName().equals("getTopLevelWorldView")
+      ?java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.WorldView.class.getClassLoader(),new Class[]{net.runelite.api.WorldView.class},
+        (p2,m2,a2)->m2.getName().equals("isInstance")?Boolean.FALSE:null):null;
+    EviLivePlugin inventoryOverworld=new EviLivePlugin();
+    set(inventoryOverworld,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public TradingProfile tradingProfile(){return TradingProfile.STANDARD;}
+      public boolean suggestIdleInventory(){return true;}
+      public boolean marginSafetyCushion(){return false;}
+    });
+    set(inventoryOverworld,"inventoryQuantities",snapshot);
+    set(inventoryOverworld,"client",java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.Client.class.getClassLoader(),new Class[]{net.runelite.api.Client.class},openWorld));
+    refreshInInstance.invoke(inventoryOverworld);
+    check(Boolean.FALSE.equals(get(inventoryOverworld,"inInstance")),"The overworld must be captured as no instance");
+    check("includeInventory=1&inventory=995:50000000,4151:1,30810:11".equals(suggestionQuery.invoke(inventoryOverworld)),"Outside an instance the tier must behave exactly as before");
+
+    // An unknown scene fails OPEN. A null client here stands in for any failure reading the world
+    // view: the tier keeps working rather than silently switching off a feature the player turned on.
+    check("includeInventory=1&inventory=995:50000000,4151:1,30810:11".equals(suggestionQuery.invoke(inventoryOn)),"An unreadable world view must leave the tier working, not quietly disable it");
+    // The capture itself must fail open too, and must not throw into onGameTick: a null client is
+    // the stand-in for any read that goes wrong mid scene-swap.
+    EviLivePlugin unreadable=new EviLivePlugin();
+    set(unreadable,"inInstance",Boolean.TRUE);
+    set(unreadable,"client",null);
+    refreshInInstance.invoke(unreadable);
+    check(Boolean.FALSE.equals(get(unreadable,"inInstance")),"A failed world-view read must clear the flag, never leave a stale instance set");
+
     // account: the same identifier already sent with every ingest packet, not a config setting --
     // left off the query entirely before the first login this process has seen (null, the
     // default), and included once known so the bridge can scope its cross-restart open-position
@@ -704,6 +758,35 @@ public final class EviLiveDeliveryTest {
     blockMethod.invoke(blockPlugin); // nothing cached now: a safe no-op
     check(blockSkips.size()==1,"Block with nothing cached must do nothing");
 
+    // acceptSuggestion(): the sidebar's "I took this one" button. Unlike Skip, Block and Personal
+    // use, this must change NOTHING about what EVI suggests -- it records that the player acted on
+    // the pick, so the suggestion has to stay on screen and the item must not be set aside. It also
+    // has to toggle, because an acceptance nobody can undo is one players stop recording.
+    EviLivePlugin acceptPlugin=new EviLivePlugin();
+    SuggestionCache acceptCache=new SuggestionCache();
+    set(acceptPlugin,"suggestionCache",acceptCache);
+    Method acceptMethod=EviLivePlugin.class.getDeclaredMethod("acceptSuggestion");acceptMethod.setAccessible(true);
+    Suggestion accepted=EviLiveSuggestionTest.suggestion(9,"buy",4,50,60);
+    accepted.id="abc-9-00";
+    acceptCache.set(accepted);
+    acceptMethod.invoke(acceptPlugin); // sender is null here: must not throw
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> acceptSkips=(java.util.Set<Integer>)get(acceptPlugin,"skippedItemIds");
+    check(acceptSkips.isEmpty(),"Accepting a suggestion must not set the item aside -- the player took it, they did not reject it");
+    check(acceptCache.get()!=null,"Accepting must leave the suggestion on screen, not clear it like Skip does");
+    check(accepted.accepted,"Accepting must mark the cached suggestion as accepted so the button reads as pressed");
+    acceptMethod.invoke(acceptPlugin);
+    check(!accepted.accepted,"Pressing it again must take the acceptance back");
+    // A suggestion the bridge issued no id for cannot be recorded, so the callback must do nothing
+    // rather than post an acceptance that refers to no logged suggestion.
+    Suggestion noId=EviLiveSuggestionTest.suggestion(12,"buy",4,50,60);
+    acceptCache.set(noId);
+    acceptMethod.invoke(acceptPlugin);
+    check(!noId.accepted,"With no suggestion id from the bridge, accepting must be a no-op");
+    EviLivePlugin.AcceptRequest acceptRequest=new EviLivePlugin.AcceptRequest("abc-9-00",9,true);
+    check("abc-9-00".equals(acceptRequest.id) && acceptRequest.itemId==9 && acceptRequest.accepted,
+      "The accept request must carry the bridge's own suggestion id, the item, and the accepted flag");
+
     // flagPersonalUse(): the sidebar's "Mark as personal use" button callback. The session-local
     // effects (skippedItemIds, clearing any live heldForResale entry, clearing suggestionCache) run
     // synchronously before the bridge POST/re-poll is handed to the (here, null -- startUp() never
@@ -945,6 +1028,6 @@ public final class EviLiveDeliveryTest {
       "maxPositions","positionSizing"))),
       "A setting's keyName changed or disappeared, which would reset it for existing users: "+keyNames);
 
-    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
+    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the accept-suggestion callback (the pick left on screen and not set aside, the toggle, the no-op without a bridge-issued id, and the AcceptRequest JSON shape), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
   }
 }

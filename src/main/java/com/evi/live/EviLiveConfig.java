@@ -210,7 +210,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "itemBlocklist",
     name = "Item blocklist (item IDs)",
-    description = "Item IDs never to suggest, e.g. 4151,995. Easier: the sidebar's Block this item button.",
+    description = "Item IDs never to suggest, e.g. 4151,995. Easier: the sidebar's Block icon.",
     section = sourceSection,
     position = 25
   )
@@ -302,7 +302,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "panelTheme",
     name = "Panel colours",
-    description = "Colours for EVI's sidebar: RuneLite's own, or the scanner's Old School parchment.",
+    description = "Colours for EVI's sidebar: RuneLite's own, or the dashboard's Old School parchment.",
     section = displaySection,
     position = 43
   )

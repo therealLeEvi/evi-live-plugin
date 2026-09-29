@@ -1,44 +1,109 @@
 # EVI Live (Local)
 
-A passive Grand Exchange companion for **EVI**, a local, personal flip-tracking tool. This plugin observes the Grand Exchange offers you place yourself, plus the few inventory details listed under Privacy below, and reports them to a bridge running on your own computer — it never sends anything anywhere else, and it never places, edits, or confirms an offer on your behalf.
+**EVI works out what to flip on the Grand Exchange, and shows it to you while you trade.**
 
-## What it does
+It reads your own offers as you place them, and learns what has actually worked for you. Then it
+tells you what to buy, how many, and at what price — in the sidebar, and in the offer box itself.
 
-- **Passive observation.** While you play normally, the plugin reports your own Grand Exchange offers (item, price, quantity, fill progress) to a small local bridge listening on `127.0.0.1` — nothing leaves your machine, and nothing is sent to any third-party server.
-- **A price/quantity hint in the offer prompt.** While a buy or sell prompt is open, a line of text shows EVI's suggested price for that item (and quantity, when it's EVI's own ranked pick based on your reviewed trade history) — for example, "EVI: press F8 for buy price 1,703 gp". This works for any item you have open, not only EVI's top suggestion.
-- **An optional fill hotkey** (default **F8**, configurable). Pressing it while the hint is shown fills the value into the field you already have open — the same way RuneLite's own built-in Grand Exchange panel fills its 25%/50%/100% quantity presets. It never submits or confirms anything; you still press Enter and click Confirm yourself.
-- **A highlighted row in item search**, and a clickable **"EVI item: `<name>`"** row with the item's icon, so you can jump straight to the suggested item the same way other Grand Exchange assistant plugins' own equivalent row works — using RuneLite's own standard widget-click plugin API, the same mechanism every plugin's own buttons already use, not simulated keyboard or mouse input.
-- **A sidebar panel** showing EVI's current top suggestion (item, quantity, buy/sell price, and the reasoning behind it) and a **Skip this suggestion** button for when you'd rather not act on it right now.
+You place every trade yourself. EVI only ever shows you things.
 
-## This plugin needs a companion bridge running locally
+> ### ⚠️ This plugin does nothing on its own
+> EVI is two halves. This plugin is the part inside RuneLite; the thinking happens in a small
+> **companion app you run on your own computer**. Until you install and start it, the sidebar will
+> simply say it cannot reach the bridge.
+>
+> **Get it here: https://github.com/therealLeEvi/evi-live-bridge** — free, open source, and it runs
+> entirely on your own machine.
 
-This plugin is one half of EVI: the other half is a small local bridge (Node.js) and a browser-based scanner/dashboard that actually tracks your trade history, computes suggestions, and shows your profit over time. Both run entirely on your own computer — no data is sent to any server operated by anyone else. Without the bridge running and paired, this plugin has nothing to show.
+---
 
-**Full source for the bridge: https://github.com/therealLeEvi/evi-live-bridge** — it is a small
-Node.js server you run yourself. It listens on `127.0.0.1` only, keeps its records in a folder next
-to itself, and the only outbound requests it makes are to two public sources: the OSRS Wiki
-real-time price API and the official Old School RuneScape news feed. There is no account, no
-sign-up, and no server operated by anyone else. Its `LOCAL-API.md` documents every endpoint this
-plugin uses, and its README covers setup and exactly what is stored.
+## Getting started
 
-The browser dashboard that reviews trades and charts profit over time is a separate, personal piece
-and is not published; the plugin and the bridge do not need it.
+1. **Install the companion app.** Download it from the
+   [bridge repository](https://github.com/therealLeEvi/evi-live-bridge) and start it. It opens a
+   setup page in your browser, and prints two keys in its own window.
+2. **Copy the plugin key** from the companion app's window — the line labelled *RuneLite plugin key*.
+   It is not the scanner key, which is the one the setup page asks for to open itself.
+3. **Open the EVI panel in RuneLite**, paste the plugin key, and click save.
 
-## Pairing
+That is the whole setup. From then on EVI watches the offers you place and starts suggesting trades.
+The longer you use it, the more it has to go on — but it gives useful suggestions from day one, with
+no history at all.
 
-On first use, open the plugin's sidebar panel, enter the pairing key shown by the local bridge/scanner, and save it. The plugin then starts sending your own offer data to `127.0.0.1` only.
+---
 
-## Privacy
+## What you get
 
-- All network activity is to `127.0.0.1` (your own computer) only. No external servers, no analytics, no telemetry.
-- Besides your own Grand Exchange offers, the plugin reads exactly these, all sent only to your own bridge:
-  - your **coin count**, to size suggestions to what you can afford;
-  - the **world type** (members or free-to-play), so members-only items are not suggested on a free-to-play world;
-  - whether items the bridge believes you still hold from earlier purchases are **in your inventory** — it reports back only those item IDs, never the rest of your inventory;
-  - your **full inventory**, only if you turn on *Suggest selling idle inventory*, which is **off by default**.
-- Nothing about other players is collected, and nothing from chat or your bank. Your account name is never sent; accounts are told apart by a salted pseudonym.
-- No automation: the plugin never opens a menu, clicks a button, selects an item, confirms an offer, or otherwise acts in the game world on its own. Every action described above either just displays information, or fills a text field you already have open — you still make and confirm every trade yourself.
+**A trade to make.** The sidebar shows one suggestion at a time by default: what to buy, how many, at
+what price, and why. Not a wall of options — one thing to do next. If you would rather run several
+positions at once, a setting lets you ask for more.
+
+**A way to tell it what you did.** Under each suggestion is a row of five icons: you took it, it is
+yours rather than stock, you no longer have it, skip it, or never suggest that item again. Telling
+EVI you took a trade is what lets it measure whether following it actually made you GP — without
+that it can only guess, from an offer happening to appear afterwards.
+
+**The price, where you need it.** While a buy or sell box is open, EVI shows the price it suggests
+for that item, for any item you have open. Press **F8** (you can change this) and it types the
+number into the box you already have open. You still press Enter and click Confirm yourself.
+
+**A check on your own offers.** EVI watches what you already have standing and tells you when one
+needs attention. It will warn you if you are selling below what the stock cost you, if the market
+has moved away from your price, or if an offer looks unlikely to fill in time.
+
+**Suggestions sized to you.** It knows how much cash you are carrying and will not suggest a trade
+you cannot afford, more of an item than the market is actually buying, or more than the Grand
+Exchange buy limit allows.
+
+**Settings that fit how you trade.** How long you are willing to wait for a trade, the smallest
+profit worth your time, how cautious to be, and whether to rank from your own history or the whole
+market.
+
+**Your profit over time.** The companion app includes a browser dashboard for reviewing your trades
+and charting what you have actually made. It is included with the bridge — nothing extra to buy.
+
+---
+
+## What it will never do
+
+This matters, so it is stated plainly rather than buried:
+
+- **It never trades for you.** It never opens a menu, clicks a button, chooses an item, or confirms
+  an offer. Every trade is placed and confirmed by you. The hotkey fills in a number in a box you
+  already opened — the same thing RuneLite's own 25% / 50% / 100% quantity buttons do.
+- **Nothing you do leaves your computer.** The plugin talks to `127.0.0.1` — your own machine — and
+  nowhere else. No account, no sign-up, no analytics, no server belonging to anyone else.
+- **Your account name is never sent.** Accounts are told apart by a scrambled pseudonym.
+
+---
+
+## Privacy, in full
+
+Everything below is sent only to the companion app on your own computer.
+
+- **Your Grand Exchange offers** — item, price, quantity, and how much has filled.
+- **Your coin count**, so suggestions fit what you can actually afford.
+- **Whether the world is members or free-to-play**, so you are not offered members' items on a
+  free-to-play world.
+- **Whether items it believes you still hold are in your inventory.** It reports only those item
+  IDs back, never the rest of your inventory.
+- **Your full inventory** — only if you switch on *Suggest selling idle inventory*, which is **off
+  by default**.
+
+Nothing is read from your bank or your chat, and nothing is collected about other players.
+
+---
+
+## Questions or problems
+
+There is a Discord for support: **https://discord.gg/gFcEBHknVN**
+
+Both halves are open source, so you can read exactly what they do:
+
+- **This plugin:** https://github.com/therealLeEvi/evi-live-plugin
+- **The companion app:** https://github.com/therealLeEvi/evi-live-bridge — its `LOCAL-API.md` lists
+  every request this plugin makes, and its README covers setup and exactly what is stored.
 
 ## License
 
-BSD 2-Clause — see [LICENSE](LICENSE).
+BSD 2-Clause. See `LICENSE`.

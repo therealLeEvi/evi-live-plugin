@@ -39,6 +39,15 @@ class Suggestion {
   String reasoning;
   boolean persisted;
   String buyId;
+  /** The bridge's handle for this exact shown suggestion, sent back by the "I took this one" button
+   * (POST /api/suggestion/accept). It is what lets EVI say what following it is actually worth:
+   * without it, the track record is assembled by guessing that an offer placed soon after a
+   * suggestion means the suggestion was followed, which cannot tell a followed pick from a trade
+   * the player meant to make anyway. Null from an older bridge, in which case the button is hidden
+   * rather than shown doing nothing. `accepted` is what the bridge has already recorded for this
+   * id, so the button reads as pressed after a reconnect instead of inviting a second press. */
+  String id;
+  boolean accepted;
   // "Sell" (holding) suggestions only, and only when the real price paid is known -- otherwise
   // null, never estimated. breakEvenPrice: the lowest sell price per unit that doesn't lose GP
   // after GE tax. lossIfSoldNow: set only when selling at sellPrice right now would lose GP, the

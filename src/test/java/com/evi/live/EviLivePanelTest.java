@@ -32,8 +32,8 @@ public final class EviLivePanelTest {
       JPasswordField field=(JPasswordField)components.stream().filter(x->x instanceof JPasswordField).findFirst().orElseThrow();
       List<JButton> buttons=components.stream().filter(x->x instanceof JButton).map(x->(JButton)x).collect(java.util.stream.Collectors.toList());
       JButton pairButton=buttons.stream().filter(b->"Save pairing key".equals(b.getText())).findFirst().orElseThrow();
-      JButton skipButton=buttons.stream().filter(b->"Skip this suggestion".equals(b.getText())).findFirst().orElseThrow();
-      JButton personalUseButton=buttons.stream().filter(b->"Mark as personal use".equals(b.getText())).findFirst().orElseThrow();
+      JButton skipButton=buttons.stream().filter(b->"Skip".equals(b.getText())).findFirst().orElseThrow();
+      JButton personalUseButton=buttons.stream().filter(b->"Mine".equals(b.getText())).findFirst().orElseThrow();
       String synthetic="abcdef0123456789".repeat(4);
       field.setText(synthetic);pairButton.doClick();
       if(!synthetic.equals(saved.get()))throw new AssertionError("Pairing callback did not receive key");
@@ -44,11 +44,11 @@ public final class EviLivePanelTest {
       if(skips.get()!=1)throw new AssertionError("Skip callback must fire exactly once per click");
       personalUseButton.doClick();
       if(personalUses.get()!=1)throw new AssertionError("Personal-use callback must fire exactly once per click");
-      JButton notHeldButton=buttons.stream().filter(b->"I don't have this anymore".equals(b.getText())).findFirst().orElseThrow();
+      JButton notHeldButton=buttons.stream().filter(b->"Gone".equals(b.getText())).findFirst().orElseThrow();
       notHeldButton.doClick();
       if(notHelds.get()!=1)throw new AssertionError("Not-held callback must fire exactly once per click");
       // Block: Skip made permanent, so a player can refuse an item without looking up its ID.
-      JButton blockButton=buttons.stream().filter(b->"Block this item".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a Block button"));
+      JButton blockButton=buttons.stream().filter(b->"Block".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a Block button"));
       blockButton.doClick();
       if(blocks.get()!=1)throw new AssertionError("Block callback must fire exactly once per click");
       // The profit line and its Reset: asked for so the sidebar shows what EVI has actually realised.
@@ -97,7 +97,12 @@ public final class EviLivePanelTest {
     profitPanel.profit(p);
     SwingUtilities.invokeAndWait(()->{});
     String line=profitText(profitPanel);
-    if(!line.startsWith("+"+String.format("%,d",2020133)+" gp"))throw new AssertionError("The profit line must lead with the figure: "+line);
+    javax.swing.JLabel figure=profitFigure(profitPanel);
+    if(figure==null||!("+"+String.format("%,d",2020133)+" gp").equals(figure.getText()))
+      throw new AssertionError("The realised figure belongs in its own label: "+(figure==null?"absent":figure.getText()));
+    // Green up. Asked for by novi on 29 Sept so the total reads at a glance.
+    if(!EviTheme.palette().good.equals(figure.getForeground()))
+      throw new AssertionError("A profit must be coloured as one: "+figure.getForeground());
     if(!line.contains("everything EVI has matched"))throw new AssertionError("Without a reset it must say what it covers: "+line);
     if(!line.contains("43 trades: 30 up, 13 down"))throw new AssertionError("Trades and the split belong on the line: "+line);
     if(!line.contains("17 sales EVI never saw bought")||!line.contains("4 purchases not yet sold"))
@@ -107,7 +112,12 @@ public final class EviLivePanelTest {
     profitPanel.profit(since);
     SwingUtilities.invokeAndWait(()->{});
     String reset=profitText(profitPanel);
-    if(!reset.startsWith(String.format("%,d",-5000)+" gp (since you reset"))throw new AssertionError("A reset count says so, and a loss is not dressed up: "+reset);
+    javax.swing.JLabel lossFigure=profitFigure(profitPanel);
+    if(lossFigure==null||!(String.format("%,d",-5000)+" gp").equals(lossFigure.getText()))
+      throw new AssertionError("A loss is not dressed up: "+(lossFigure==null?"absent":lossFigure.getText()));
+    if(!EviTheme.palette().bad.equals(lossFigure.getForeground()))
+      throw new AssertionError("A loss must be coloured as one, never green: "+lossFigure.getForeground());
+    if(!reset.startsWith("(since you reset"))throw new AssertionError("A reset count says so: "+reset);
     if(reset.contains("Not counted"))throw new AssertionError("With nothing left out, the caveat must not appear: "+reset);
     profitPanel.profit(null);
     SwingUtilities.invokeAndWait(()->{});
@@ -260,14 +270,23 @@ public final class EviLivePanelTest {
       if(back.isVisible())throw new AssertionError("It must disappear again once nothing is set aside");
     }
 
-    System.out.println("PASS: the session set-aside count and its undo button; the profit line (figure, trades, what it leaves out, a reset count, an unreadable answer, and reset feedback), the colour-scheme switch repainting in place (including rows rebuilt afterwards), sidebar pairing callback, masked key input and clearing after save, the skip-suggestion and block button callbacks, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten), the suggestion card (item, worth, verdict label and check lines; a failed check marked as well as coloured; and the paragraph coming back when the bridge sends no verdict), and the pairing section collapsing once paired and returning when a key is cleared, with the status dot tracking the bridge");
+    System.out.println("PASS: the session set-aside count and its undo button; the profit line (the figure in its own label, coloured green up and red down, trades, what it leaves out, a reset count, an unreadable answer, and reset feedback), the five-icon action row (each caption, its callback, and the row replacing the old button stack), the colour-scheme switch repainting in place (including rows rebuilt afterwards), sidebar pairing callback, masked key input and clearing after save, the skip-suggestion and block button callbacks, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten), the suggestion card (item, worth, verdict label and check lines; a failed check marked as well as coloured; and the paragraph coming back when the bridge sends no verdict), and the pairing section collapsing once paired and returning when a key is cleared, with the status dot tracking the bridge");
   }
   /** The profit line's current text: the one text area that starts with a figure or its own status. */
   private static String profitText(Container panel) {
     List<Component> all=new ArrayList<>();visit(panel,all);
     return all.stream().filter(c->c instanceof javax.swing.JTextArea).map(c->((javax.swing.JTextArea)c).getText())
-      .filter(t->t.startsWith("+")||t.startsWith("-")||t.startsWith("Profit unavailable")||t.startsWith("Counting from now")||t.startsWith("Waiting for the bridge"))
+      .filter(t->t.startsWith("(")||t.startsWith("Profit unavailable")||t.startsWith("Counting from now")||t.startsWith("Waiting for the bridge"))
       .findFirst().orElse("");
+  }
+
+  /** The realised figure, which is now a bold JLabel of its own so it can carry the up/down colour
+   *  without painting the "Not counted" caveats beside it the same shade. */
+  private static javax.swing.JLabel profitFigure(Container panel) {
+    List<Component> all=new ArrayList<>();visit(panel,all);
+    return all.stream().filter(c->c instanceof javax.swing.JLabel).map(c->(javax.swing.JLabel)c)
+      .filter(l->l.getText()!=null&&l.getText().endsWith(" gp"))
+      .findFirst().orElse(null);
   }
 
   private static List<String> labels(Container panel) {

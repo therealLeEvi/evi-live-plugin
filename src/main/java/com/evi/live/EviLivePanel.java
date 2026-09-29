@@ -5,6 +5,8 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,6 +22,7 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JTextArea;
 import javax.swing.text.DefaultCaret;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.border.CompoundBorder;
 import net.runelite.client.ui.ColorScheme;
@@ -57,6 +60,14 @@ final class EviLivePanel extends PluginPanel {
    *  aside earlier in the session, with nothing on screen saying so or offering it back. */
   private final JLabel skipCount = new JLabel();
   private final JButton clearSkipsButton;
+  // The five action-row buttons. Held as fields because which of them APPLY changes with every
+  // suggestion: a buy cannot be personal use or already gone, and a holding cannot be blocked.
+  private final JButton acceptButton;
+  private final JButton personalUseButton;
+  private final JButton notHeldButton;
+  private final JButton blockButton;
+  /** Client-property key carrying a button's glyph, so a theme switch can redraw it in the new colours. */
+  private static final String GLYPH = "eviGlyph";
   private final Runnable clearSkips;
   /** Further positions, when the player has asked for more than one. Empty and hidden by default. */
   private final JPanel alsoList = new JPanel();
@@ -72,6 +83,11 @@ final class EviLivePanel extends PluginPanel {
   // Whether the current suggestion would lose GP, kept so a theme switch repaints the right stripe.
   private volatile boolean warned;
   private final JTextArea offerHint = bodyText("");
+  // The realised total is split in two on purpose: the figure carries the colour, the line below it
+  // carries the caveats. Colouring one text area would paint "Not counted: 17 sales EVI never saw
+  // bought" green as well, which reads as if those were profit -- the precise misreading that line
+  // exists to prevent.
+  private final JLabel profitFigure = new JLabel(" ");
   private final JTextArea profitLine = bodyText("Waiting for the bridge.");
   private final JPanel offerList = new JPanel();
 
@@ -95,6 +111,11 @@ final class EviLivePanel extends PluginPanel {
 
   EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
                Runnable resetProfit, Runnable clearSkips) {
+    this(pair, skip, personalUse, notHeld, block, resetProfit, clearSkips, () -> { });
+  }
+
+  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
+               Runnable resetProfit, Runnable clearSkips, Runnable accept) {
     this.clearSkips = clearSkips;
     setLayout(new BorderLayout());
     role(this, "bg");
@@ -127,11 +148,15 @@ final class EviLivePanel extends PluginPanel {
     // story: unmatched sales and unsold purchases are not profit. --
     content.add(section());
     content.add(sectionHeader("Profit since counting began"));
+    profitFigure.setFont(FontManager.getRunescapeBoldFont());
+    profitFigure.setAlignmentX(Component.LEFT_ALIGNMENT);
+    role(profitFigure, "text");
+    content.add(profitFigure);
     profitLine.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
     content.add(profitLine);
     JButton resetButton = secondaryButton("Reset profit count");
     resetButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    resetButton.getAccessibleContext().setAccessibleDescription("Starts this profit line counting from now. Your trade records, flips and the scanner's own total are untouched.");
+    resetButton.getAccessibleContext().setAccessibleDescription("Starts this profit line counting from now. Your trade records, flips and the dashboard's own total are untouched.");
     resetButton.addActionListener(e -> resetProfit.run());
     content.add(Box.createVerticalStrut(6));
     content.add(resetButton);
@@ -147,32 +172,40 @@ final class EviLivePanel extends PluginPanel {
     suggestion.setOpaque(false);
     suggestionCard.add(suggestion, BorderLayout.CENTER);
     content.add(suggestionCard);
-    JButton skipButton = secondaryButton("Skip this suggestion");
-    skipButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    skipButton.getAccessibleContext().setAccessibleDescription("Excludes the current suggestion and checks for the next-best one. Does not affect any offer you've already placed.");
-    skipButton.addActionListener(e -> skip.run());
-    // Block is Skip made permanent: asked for so a player who never wants an item suggested again
-    // can say so in one click, instead of looking up its item ID for the blocklist setting.
-    JButton blockButton = secondaryButton("Block this item");
-    blockButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    blockButton.getAccessibleContext().setAccessibleDescription("Never suggest buying this item again. Undo it in the scanner's Blocked items list. Stock you already hold still gets its sell reminder.");
-    blockButton.addActionListener(e -> block.run());
+    // The five actions as ONE row of icons rather than five stacked buttons.
+    //
+    // They were added one at a time, each justified on its own, and together they became a stack
+    // that crowded a panel 225px wide -- which is all RuneLite gives a plugin. Five icons at 37px
+    // is exactly what that width allows, so this row is at its limit and a sixth action would have
+    // to earn its place by displacing something.
+    //
+    // Every one is drawn identically: same face, same border, same colour. None is filled or
+    // accented to stand out, because these are ALTERNATIVES and the panel must not express a
+    // preference between them. That matters most for "I took this one": a record-keeping control
+    // people press because it is the brightest thing on screen produces a record that only looks
+    // like evidence, which is worse than having none. A one-word caption under each icon means the
+    // row can be read without hovering; the tooltip carries the full sentence.
+    JPanel actionRow = new JPanel(new GridLayout(1, 5, 5, 0));
+    actionRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+    actionRow.setOpaque(false);
+    actionRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+    acceptButton = iconButton(EviIcons.Glyph.TOOK_IT, "Took it",
+      "Tell EVI you acted on this suggestion, so it can measure whether following it actually made GP. Recorded on your own machine only; press again to take it back.", accept);
+    personalUseButton = iconButton(EviIcons.Glyph.PERSONAL_USE, "Mine",
+      "For something you are holding: bought for your own use, not to flip. It stops being suggested and never counts toward profit. Only this purchase -- buying the item again later is unaffected.", personalUse);
+    notHeldButton = iconButton(EviIcons.Glyph.GONE, "Gone",
+      "For something you are holding but no longer have: used in-game, or sold while EVI was not running. Whatever part of it EVI saw sold still counts toward profit.", notHeld);
+    JButton skipButton = iconButton(EviIcons.Glyph.SKIP, "Skip",
+      "Set this suggestion aside for this session and check for the next-best one. Does not affect any offer you have already placed.", skip);
+    blockButton = iconButton(EviIcons.Glyph.BLOCK, "Block",
+      "Never suggest buying this item again. Undo it in the dashboard's Blocked items list. Stock you already hold still gets its sell reminder.", block);
+    actionRow.add(acceptButton);
+    actionRow.add(personalUseButton);
+    actionRow.add(notHeldButton);
+    actionRow.add(skipButton);
+    actionRow.add(blockButton);
     content.add(Box.createVerticalStrut(6));
-    content.add(skipButton);
-    content.add(Box.createVerticalStrut(6));
-    content.add(blockButton);
-    JButton personalUseButton = secondaryButton("Mark as personal use");
-    personalUseButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    personalUseButton.getAccessibleContext().setAccessibleDescription("For a \"you're holding this, sell it\" suggestion: marks this one purchase as bought for your own use, not a flip. It won't be suggested again and won't count toward profit if sold. Only this purchase -- buying this item again later is unaffected.");
-    personalUseButton.addActionListener(e -> personalUse.run());
-    content.add(Box.createVerticalStrut(6));
-    content.add(personalUseButton);
-    JButton notHeldButton = secondaryButton("I don't have this anymore");
-    notHeldButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    notHeldButton.getAccessibleContext().setAccessibleDescription("For a \"you're holding this, sell it\" suggestion about something you no longer have: used in-game, or sold while EVI wasn't running. It stops being suggested for good, and whatever part of it EVI saw sold still counts toward profit.");
-    notHeldButton.addActionListener(e -> notHeld.run());
-    content.add(Box.createVerticalStrut(6));
-    content.add(notHeldButton);
+    content.add(actionRow);
 
     // What this session has set aside, and the way back. Hidden entirely at zero, so it costs nothing
     // on screen until it is the thing actually shaping what EVI can offer.
@@ -291,6 +324,68 @@ final class EviLivePanel extends PluginPanel {
    *  fed by four buttons and one automatic path, and until 28 Sept 2026 nothing revealed it: a player
    *  who had skipped their way down to a worthless suggestion had no way to tell that was why, and no
    *  way back short of restarting the client. EDT only. */
+  /** One action in the row: a drawn glyph, a one-word caption beneath it, and the whole sentence as
+   *  its tooltip. An icon-only row is guessable only after hovering everything once; the caption
+   *  costs about ten pixels and removes that. */
+  private JButton iconButton(EviIcons.Glyph glyph, String caption, String description, Runnable action) {
+    JButton b = new JButton(caption);
+    EviTheme.Palette p = EviTheme.palette();
+    b.setIcon(EviIcons.of(glyph, p.buttonText, 16));
+    b.setDisabledIcon(EviIcons.of(glyph, p.muted, 16));
+    b.setVerticalTextPosition(SwingConstants.BOTTOM);
+    b.setHorizontalTextPosition(SwingConstants.CENTER);
+    b.setIconTextGap(3);
+    b.setFont(FontManager.getRunescapeSmallFont());
+    b.setFocusPainted(false);
+    b.setMargin(new Insets(3, 0, 2, 0));
+    b.setToolTipText(description);
+    b.getAccessibleContext().setAccessibleDescription(description);
+    b.addActionListener(e -> action.run());
+    role(b, "button");
+    b.putClientProperty(GLYPH, glyph);
+    return b;
+  }
+
+  /** Which of the five row actions apply to what is on screen.
+   *
+   *  The ones that do not apply are DIMMED, never hidden, so the row keeps its length and every icon
+   *  keeps its position -- the row stays learnable, and a player is not left wondering where a
+   *  control went. A dimmed icon keeps a tooltip too, but one that says why it is unavailable rather
+   *  than only what it would do: before this, pressing Personal use on a buy popped a refusal, which
+   *  is a worse way to learn the same thing.
+   *
+   *  "I took this one" is dimmed rather than shown doing nothing when the bridge sent no id for the
+   *  suggestion -- an older bridge cannot record an acceptance. EDT only. */
+  void actions(boolean canAccept, boolean accepted, boolean holding, boolean canForget, boolean buying) {
+    SwingUtilities.invokeLater(() -> {
+      acceptButton.setEnabled(canAccept);
+      acceptButton.setText(accepted ? "Taken" : "Took it");
+      acceptButton.setToolTipText(!canAccept
+        ? "This needs a newer companion app before EVI can record what you took."
+        : accepted
+          ? "Recorded as taken. Press again to take that back."
+          : "Tell EVI you acted on this suggestion, so it can measure whether following it actually made GP. Recorded on your own machine only; press again to take it back.");
+      personalUseButton.setEnabled(holding);
+      personalUseButton.setToolTipText(holding
+        ? "Bought for your own use, not to flip. It stops being suggested and never counts toward profit. Only this purchase -- buying the item again later is unaffected."
+        : "Only applies to something you are already holding.");
+      // Not just `holding`: this closes one specific purchase, so it needs a buy behind it. Gear the
+      // idle-inventory tier offered was never watched being bought and has none.
+      notHeldButton.setEnabled(canForget);
+      notHeldButton.setToolTipText(canForget
+        ? "You no longer have this: used in-game, or sold while EVI was not running. Whatever part of it EVI saw sold still counts toward profit."
+        : holding
+          ? "EVI cannot trace this back to one purchase, so there is nothing to close. Use Mine instead."
+          : "Only applies to something you are already holding.");
+      // Block stays buy-only on purpose: when you already own some, EVI keeps reminding you to sell
+      // it, because going quiet about stock you hold is how GP gets stuck.
+      blockButton.setEnabled(buying);
+      blockButton.setToolTipText(buying
+        ? "Never suggest buying this item again. Undo it in the dashboard's Blocked items list. Stock you already hold still gets its sell reminder."
+        : "Only applies to a buy suggestion. EVI still reminds you to sell stock you own.");
+    });
+  }
+
   void skipped(int count) {
     SwingUtilities.invokeLater(() -> {
       boolean any = count > 0;
@@ -635,10 +730,19 @@ final class EviLivePanel extends PluginPanel {
       else if ("text".equals(role)) jc.setForeground(p.text);
       else if ("muted".equals(role)) jc.setForeground(p.muted);
       else if ("warn".equals(role)) jc.setForeground(p.warn);
+      else if ("good".equals(role)) jc.setForeground(p.good);
+      else if ("bad".equals(role)) jc.setForeground(p.bad);
       else if ("field".equals(role)) { jc.setBackground(p.card); jc.setForeground(p.text); }
       else if ("button".equals(role) || "primary".equals(role)) {
         jc.setBackground(p.buttonFace);
         jc.setForeground(p.buttonText);
+        // A drawn glyph carries its colour inside the Icon, so a theme switch has to rebuild it --
+        // repainting the button alone would leave the old colour sitting in the icon.
+        Object glyph = jc.getClientProperty(GLYPH);
+        if (glyph instanceof EviIcons.Glyph && jc instanceof JButton) {
+          ((JButton) jc).setIcon(EviIcons.of((EviIcons.Glyph) glyph, p.buttonText, 16));
+          ((JButton) jc).setDisabledIcon(EviIcons.of((EviIcons.Glyph) glyph, p.muted, 16));
+        }
         if ("primary".equals(role)) jc.setBorder(new CompoundBorder(
           BorderFactory.createLineBorder(p.accent), BorderFactory.createEmptyBorder(5, 9, 5, 9)));
       }
@@ -664,10 +768,23 @@ final class EviLivePanel extends PluginPanel {
   /** The bridge's realised-profit figure, or null when it could not be read this poll. EDT only. */
   void profit(EviLivePlugin.Profit p) {
     SwingUtilities.invokeLater(() -> {
-      if (p == null) { setIfChanged(profitLine, "Profit unavailable -- the bridge did not answer."); return; }
+      if (p == null) {
+        profitFigure.setText(" ");
+        role(profitFigure, "text");
+        profitFigure.setForeground(EviTheme.palette().text);
+        setIfChanged(profitLine, "Profit unavailable -- the bridge did not answer.");
+        return;
+      }
+      // Green up, red down, plain at nothing. Zero is deliberately NOT green: a player who has made
+      // exactly nothing has not made a profit, and a green nought says otherwise at a glance. The
+      // colour is set through the role so a theme switch repaints it with everything else.
+      String tone = p.gp > 0 ? "good" : p.gp < 0 ? "bad" : "text";
+      profitFigure.setText((p.gp >= 0 ? "+" : "") + String.format("%,d", p.gp) + " gp");
+      role(profitFigure, tone);
+      EviTheme.Palette pal = EviTheme.palette();
+      profitFigure.setForeground("good".equals(tone) ? pal.good : "bad".equals(tone) ? pal.bad : pal.text);
       StringBuilder text = new StringBuilder();
-      text.append(p.gp >= 0 ? "+" : "").append(String.format("%,d", p.gp)).append(" gp");
-      text.append(p.since == null ? " (everything EVI has matched" : " (since you reset");
+      text.append(p.since == null ? "(everything EVI has matched" : "(since you reset");
       text.append(", ").append(p.trades).append(p.trades == 1 ? " trade" : " trades");
       if (p.winners + p.losers > 0) text.append(": ").append(p.winners).append(" up, ").append(p.losers).append(" down");
       text.append(")");
@@ -686,7 +803,14 @@ final class EviLivePanel extends PluginPanel {
 
   /** Immediate feedback on the Reset click; the real figure arrives with the next poll. */
   void profitResetPending() {
-    SwingUtilities.invokeLater(() -> setIfChanged(profitLine, "Counting from now..."));
+    SwingUtilities.invokeLater(() -> {
+      // The old figure has to go with the old count -- leaving a green total above "Counting from
+      // now..." would show a number that no longer describes anything.
+      profitFigure.setText(" ");
+      role(profitFigure, "text");
+      profitFigure.setForeground(EviTheme.palette().text);
+      setIfChanged(profitLine, "Counting from now...");
+    });
   }
 
   void offers(List<EviLivePlugin.OfferRow> rows) {

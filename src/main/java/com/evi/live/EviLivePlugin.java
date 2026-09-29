@@ -119,6 +119,11 @@ public class EviLivePlugin extends Plugin {
   //                       still ranks normally when any exist and simply says to collect first.
   // Both start at -1 ("not known yet", before the first slot snapshot) which sends nothing at all
   // and filters nothing -- the same fail-open rule as cashStack and membersWorld above.
+  // Whether the player is standing in an instance. Client-thread write, poll-thread read, hence
+  // volatile -- see refreshInInstance for why this is not read inline.
+  private volatile boolean inInstance;
+  // Acceptances the player has pressed but the bridge has not confirmed yet. See acceptSuggestion.
+  private final java.util.Map<String,Boolean> pendingAccept=new java.util.concurrent.ConcurrentHashMap<>();
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
@@ -237,8 +242,9 @@ public class EviLivePlugin extends Plugin {
     salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit,this::clearSkips);
+      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit,this::clearSkips,this::acceptSuggestion);
       panel.applyTheme(config.panelTheme());
+      panel.actions(false,false,false,false,false);
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
@@ -300,7 +306,29 @@ public class EviLivePlugin extends Plugin {
       return sb.toString().trim();
     }
   }
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();}
+  /** Whether the player is in an instanced scene -- a raid, and most other kitted-out content.
+   *
+   *  Uses WorldView.isInstance() rather than the deprecated Client.isInInstancedRegion(). Returns
+   *  FALSE on any failure, which is the fail-open direction that matters here: an unknown scene
+   *  leaves the tier working exactly as it did before rather than silently switching a feature off
+   *  the player turned on.
+   *
+   *  Captured on the CLIENT THREAD into a volatile field and read from the poll thread, exactly like
+   *  activeSlotItemIds, cashStack and inventoryQuantities. An earlier version of this read the
+   *  client directly from suggestionQuery(), which runs on the evi-local-sender executor -- a
+   *  RuneLite API read off the client thread, which this plugin forbids itself everywhere else (see
+   *  verifyPersistedHolding, which deliberately does not refresh the inventory for this reason).
+   *  Besides being the kind of thing a Hub reviewer flags, it could read a half-swapped world view
+   *  during a region change and report an instance in the overworld, or none inside a raid -- which
+   *  is precisely the case this feature exists for. */
+  private void refreshInInstance() {
+    try {
+      net.runelite.api.WorldView wv=client.getTopLevelWorldView();
+      inInstance = wv!=null && wv.isInstance();
+    } catch(Throwable ignored){ inInstance=false; }
+  }
+
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -494,6 +522,7 @@ public class EviLivePlugin extends Plugin {
     try { itemSelectWidget.update(); } catch (Exception ignored) { }
     refreshCashStack();
     refreshInventoryItemIds();
+    refreshInInstance();
     refreshOpenOfferItemId();
     refreshMembersWorld();
     String current=configManager.getRSProfileKey();
@@ -712,6 +741,34 @@ public class EviLivePlugin extends Plugin {
     if(running && sender!=null)sender.execute(()->{
       if(key!=null){try{transport.markBlocked(key,gson.toJson(new BlockRequest(itemId)));}catch(Exception ignored){}}
       pollSuggestion(lifecycle);
+    });
+  }
+  // Called only from the sidebar's "I took this one" button (Swing EDT). Records that the player
+  // actually acted on this exact suggestion, which is the only thing that lets EVI honestly say what
+  // following it has been worth: every other reading of its track record infers acceptance from an
+  // offer appearing soon after a suggestion, and that cannot tell a followed pick from a trade the
+  // player meant to make anyway. Unlike Skip, Block and Personal use, this changes NOTHING about what
+  // EVI suggests -- it neither hides the pick nor asks for a new one -- so the suggestion stays on
+  // screen and the button simply flips to its undo wording. Pressing it again takes it back, because
+  // a mistaken tap that cannot be undone is a tap players stop making, and a track record people are
+  // afraid to touch is worth less than no track record. The POST runs on the background sender.
+  private void acceptSuggestion() {
+    Suggestion s=suggestionCache.get();
+    if(s==null||s.id==null||s.id.isEmpty())return;
+    final boolean nowAccepted=!s.accepted;
+    s.accepted=nowAccepted;
+    // Remembered LOCALLY until the bridge echoes the same answer for this id. Without it the press
+    // races the two-second poll: a poll already in flight when the button is clicked returns the
+    // suggestion with accepted=false, because the bridge has not been told yet, and
+    // updatePanelSuggestion resets the button. The player sees their click not register, presses
+    // again, and the second press posts accepted:false -- silently undoing the acceptance they just
+    // made. That corrupts the one observation this whole feature exists to produce.
+    pendingAccept.put(s.id,nowAccepted);
+    if(panel!=null)panel.actions(true,nowAccepted,"sell".equals(s.action),
+      "sell".equals(s.action)&&s.buyId!=null&&!s.buyId.isEmpty(),"buy".equals(s.action));
+    String key=pluginKey;final String id=s.id;final int itemId=s.itemId;
+    if(running && sender!=null && key!=null)sender.execute(()->{
+      try{transport.markAccepted(key,gson.toJson(new AcceptRequest(id,itemId,nowAccepted)));}catch(Exception ignored){}
     });
   }
   // Called only from the sidebar's "Personal use" button (Swing EDT). For supplies bought via the
@@ -946,7 +1003,15 @@ public class EviLivePlugin extends Plugin {
     // worth selling that EVI never observed a buy for at all. TreeMap here purely for a
     // deterministic query string (same reasoning as the sorted `exclude` set above), not because
     // ordering matters to the bridge.
-    if(config.suggestIdleInventory() && !inventoryQuantities.isEmpty()) {
+    // Never inside an instance. Reported by novi on 28 Sept 2026 from inside a raid: EVI was
+    // offering to sell their supplies and raid gear, because to this tier an inventory is an
+    // inventory. In a raid it is a loadout, not idle stock -- and the Grand Exchange cannot be
+    // reached from in there anyway, so the suggestion could not be acted on even if it were right.
+    // The same holds for every other instance a player carries a kit into.
+    //
+    // Only this tier is suppressed. The holding tier is about stock EVI actually watched them buy,
+    // and a reminder about that is still worth having wherever they are standing.
+    if(config.suggestIdleInventory() && !inventoryQuantities.isEmpty() && !inInstance) {
       Map<Integer,Integer> sorted=new TreeMap<>(inventoryQuantities);
       if(q.length()>0)q.append('&');
       q.append("includeInventory=1&inventory=");
@@ -1026,7 +1091,25 @@ public class EviLivePlugin extends Plugin {
   }
   private void updatePanelSuggestion(Suggestion s, String diag) {
     if(panel==null)return;
-    if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);return;}
+    if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);panel.actions(false,false,false,false,false);return;}
+    // The accept button only appears when the bridge issued an id for this suggestion. An older
+    // bridge cannot record an acceptance, so showing the button would invite a press that does
+    // nothing -- the same reasoning as every other capability this plugin degrades rather than fakes.
+    // Which of the five row actions apply to THIS suggestion. A buy cannot be personal use or
+    // already gone; a holding cannot be blocked. The plugin already knows which it is, so the row
+    // dims the rest rather than offering a press that gets refused.
+    //
+    // "Gone" needs more than a holding: flagNotHeld also requires a buyId, because it closes one
+    // specific purchase. An idle-inventory suggestion -- worn gear EVI never watched being bought --
+    // has none, so without this the icon would light up and then refuse the press, which is exactly
+    // the behaviour the icon row was built to remove.
+    boolean holding="sell".equals(s.action), buying="buy".equals(s.action);
+    boolean canForget=holding&&s.buyId!=null&&!s.buyId.isEmpty();
+    // A local press outranks the bridge until the bridge agrees, so an in-flight poll cannot undo it.
+    Boolean pending=s.id==null?null:pendingAccept.get(s.id);
+    boolean accepted=pending!=null?pending:s.accepted;
+    if(pending!=null&&pending==s.accepted)pendingAccept.remove(s.id);
+    panel.actions(s.id!=null&&!s.id.isEmpty(),accepted,holding,canForget,buying);
     // A sell that would lose GP right now is still shown -- it's the player's call -- but flagged
     // up front with its break-even price and the card turns orange, so it can't read like a normal flip.
     String warning=s.sellsAtLoss()
@@ -1201,6 +1284,11 @@ public class EviLivePlugin extends Plugin {
   // which is all the idle-inventory tier can offer -- see flagPersonalUse and Store.markPersonalUseItem.
   // Request body for POST /api/suggestion/block (see blockSuggestion and LocalTransport.markBlocked).
   static class BlockRequest {int itemId;boolean blocked=true;BlockRequest(int itemId){this.itemId=itemId;}}
+  // Request body for POST /api/suggestion/accept (see acceptSuggestion and LocalTransport.markAccepted).
+  // id is the bridge's own handle for the exact suggestion that was shown; itemId is sent only so the
+  // record is readable without joining it back to the log. accepted carries the undo.
+  static class AcceptRequest {String id;int itemId;boolean accepted;
+    AcceptRequest(String id,int itemId,boolean accepted){this.id=id;this.itemId=itemId;this.accepted=accepted;}}
   static class PersonalUseRequest {String buyId;Integer itemId;boolean personal=true;
     PersonalUseRequest(String buyId){this.buyId=buyId;}
     static PersonalUseRequest forItem(int itemId){PersonalUseRequest r=new PersonalUseRequest(null);r.itemId=itemId;return r;}}

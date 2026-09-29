@@ -47,6 +47,9 @@ interface LocalTransport {
    * above. Undone from the scanner, which lists blocked items by name.
    */
   default int markBlocked(String key, String json) throws IOException { return 0; }
+  // "I took this one": the only way EVI learns whether following it actually worked. Defaulted so a
+  // test double need not implement it, exactly like the buttons above.
+  default int markAccepted(String key, String json) throws IOException { return 0; }
 
   /**
    * The sidebar's "Reset" beside its profit line: start counting realised profit from now (see
@@ -90,6 +93,9 @@ interface LocalTransport {
     }
     public int markBlocked(String key, String json) throws IOException {
       return post("http://127.0.0.1:51743/api/suggestion/block", key, json);
+    }
+    public int markAccepted(String key, String json) throws IOException {
+      return post("http://127.0.0.1:51743/api/suggestion/accept", key, json);
     }
     public int resetProfit(String key, String json) throws IOException {
       return post("http://127.0.0.1:51743/api/profit/reset", key, json);
