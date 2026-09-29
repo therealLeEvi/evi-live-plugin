@@ -121,6 +121,9 @@ public class EviLivePlugin extends Plugin {
   // and filters nothing -- the same fail-open rule as cashStack and membersWorld above.
   // Whether the player is standing in an instance. Client-thread write, poll-thread read, hence
   // volatile -- see refreshInInstance for why this is not read inline.
+  // Set when the bridge ANSWERS with a 401. A saved key that the bridge refuses is not a pairing,
+  // and the panel must stop pretending it is -- see refreshPairingVisibility.
+  private volatile boolean keyRejected;
   private volatile boolean inInstance;
   // Acceptances the player has pressed but the bridge has not confirmed yet. See acceptSuggestion.
   private final java.util.Map<String,Boolean> pendingAccept=new java.util.concurrent.ConcurrentHashMap<>();
@@ -279,7 +282,19 @@ public class EviLivePlugin extends Plugin {
   private void status(String message){if(panel!=null)panel.status(message);}
   /** Setup that is finished costs the 225px sidebar room it needs for the pick, so the pairing
    *  fields go away once a key is held and come back if it is ever cleared. */
-  private void refreshPairingVisibility(){if(panel!=null)panel.paired(pluginKey!=null&&!pluginKey.isEmpty());}
+  // A key is only "paired" if the bridge accepts it. Hiding the field on SAVE rather than on
+  // success made a mistyped key a one-way door: the field, the Save button and the whole section
+  // vanish, and the only way back is deleting plugin-key.txt from .runelite/plugin-data/evi-live --
+  // which no player should have to be told. A 401 now brings the section straight back, so the
+  // message telling them which key to paste has somewhere to paste it.
+  /** Whether the panel should treat the plugin as paired, and so hide the key field.
+   *
+   *  A key counts only if one is saved AND the bridge is not refusing it. Keying this on the save
+   *  alone made a mistyped key a one-way door: the field, the Save button and the whole section
+   *  vanish, and the only way back is deleting plugin-key.txt from .runelite/plugin-data/evi-live,
+   *  which no player should have to be told. Static so it can be tested without a Swing panel. */
+  static boolean showAsPaired(String key, boolean rejected){ return key!=null && !key.isEmpty() && !rejected; }
+  private void refreshPairingVisibility(){if(panel!=null)panel.paired(showAsPaired(pluginKey,keyRejected));}
   private void pair(String entered) {
     try {
       final long generation=lifecycle;
@@ -288,6 +303,7 @@ public class EviLivePlugin extends Plugin {
       clientThread.invokeLater(()->{
         if(!running || generation!=lifecycle)return;
         synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
+        keyRejected=false; // a new key is a fresh attempt, not the refused one
         reset();
         status("Pairing saved. Log in; connection is checked when the first snapshot is sent.");
         refreshPairingVisibility();
@@ -321,6 +337,22 @@ public class EviLivePlugin extends Plugin {
    *  Besides being the kind of thing a Hub reviewer flags, it could read a half-swapped world view
    *  during a region change and report an instance in the overworld, or none inside a raid -- which
    *  is precisely the case this feature exists for. */
+  /** What to tell the player when the bridge returned no suggestion body.
+   *
+   *  A rejected key and an unreachable companion app both arrive as a null body, and they need
+   *  opposite advice. Sending someone to check that the app is running, while it is running and
+   *  answering, points them at the one thing that is not wrong: EVI's second user was shown
+   *  "Bridge unreachable" and "Bridge rejected the key" in the same panel, and the app was fine.
+   *
+   *  A 401 is the bridge ANSWERING, so it is named as a key problem, and the message says which of
+   *  the two keys to use -- the app prints "Scanner key" and "RuneLite plugin key" on adjacent
+   *  lines, and taking the wrong one is the easy mistake. Any other status, including none at all,
+   *  keeps the original wording, because then it really may be unreachable. */
+  static String bridgeFailureMessage(int status) {
+    return status==401
+      ? "Wrong key. EVI reached the companion app and it refused this key -- paste the one it prints as \"RuneLite plugin key\", not the Scanner key."
+      : "Bridge unreachable -- check it's running and the pairing key matches.";
+  }
   private void refreshInInstance() {
     try {
       net.runelite.api.WorldView wv=client.getTopLevelWorldView();
@@ -607,6 +639,8 @@ public class EviLivePlugin extends Plugin {
         int status=transport.send(key,json);
         if(!running || generation!=lifecycle)return;
         synchronized(queue){if(revision!=pairingRevision)return;}
+        if(status==401){keyRejected=true;refreshPairingVisibility();}
+        else if(keyRejected){keyRejected=false;refreshPairingVisibility();}
         if(status!=200){status(status==401?"Bridge rejected the key. Paste this bridge's RuneLite plugin key.":"Bridge returned HTTP "+status+". Pending observations retained for retry.");return;}
         synchronized(queue){if(json.equals(queue.peek()))queue.remove();}
         status("Connected to the local bridge. Last delivery: "+java.time.LocalTime.now().withNano(0));
@@ -631,7 +665,21 @@ public class EviLivePlugin extends Plugin {
       // Distinguishes "bridge reachable but returned nothing" from a request that never even got a
       // 200, so the sidebar can say which one is happening instead of collapsing both into a bare
       // "No suggestion yet."
-      if(json==null){updatePanelSuggestion(null,"Bridge unreachable -- check it's running and the pairing key matches.");return;}
+      // A rejected key and an unreachable bridge both arrive here as a null body, and they need
+      // opposite advice. Telling a player to check the companion app is running, while it is running
+      // and answering, sends them to look at the one thing that is not wrong -- EVI's second user was
+      // shown this and "Bridge rejected the key" side by side in the same panel. 401 is the bridge
+      // ANSWERING, so it is named as such, and the message says which of the two printed keys to use,
+      // because they sit adjacent in its window and the wrong one is the easy mistake.
+      if(json==null){
+        int status=0;
+        try{status=transport.lastGetStatus();}catch(Throwable ignored){}
+        // Same as the events path: a refused key un-pairs, so the field comes back to be corrected.
+        if(status==401 && !keyRejected){keyRejected=true;refreshPairingVisibility();}
+        updatePanelSuggestion(null,bridgeFailureMessage(status));
+        return;
+      }
+      if(keyRejected){keyRejected=false;refreshPairingVisibility();}
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
       // Remember which positions the bridge believes are held, so the next poll can confirm them

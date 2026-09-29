@@ -20,6 +20,13 @@ interface LocalTransport {
    * for none -- built entirely from this plugin's own local config, never from observed content.
    */
   String get(String key, String query) throws IOException;
+  /** The HTTP status of the most recent {@link #get}, or 0 if none has run.
+   *
+   * A rejected key and an unreachable bridge both surface as a null body, and telling the player to
+   * check something that is not wrong is the worst kind of error message: EVI's second user was shown
+   * "Bridge unreachable" and "Bridge rejected the key" in the same panel, while the bridge was
+   * running and answering. This is what lets the suggestion path say which one actually happened. */
+  default int lastGetStatus() { return 0; }
 
   /**
    * Flags (or unflags) a specific, already-observed buy offer as personal use with the bridge --
@@ -113,6 +120,8 @@ interface LocalTransport {
         .build();
       try(Response response = client.newCall(request).execute()) { return response.code(); }
     }
+    private volatile int lastGet;
+    @Override public int lastGetStatus() { return lastGet; }
     public String get(String key, String query) throws IOException {
       String url = "http://127.0.0.1:51743/api/suggestion" + (query == null || query.isEmpty() ? "" : "?" + query);
       Request request = new Request.Builder()
@@ -124,6 +133,7 @@ interface LocalTransport {
         .get()
         .build();
       try(Response response = client.newCall(request).execute()) {
+        lastGet = response.code();
         if (response.code() != 200) return null;
         ResponseBody body = response.body();
         return body == null ? null : body.string();
