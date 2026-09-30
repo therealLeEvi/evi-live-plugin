@@ -70,7 +70,7 @@ class SuggestionKeybindHandler {
     }
   }
 
-  private void fillValue(int value) {
+  private void fillValue(long value) {
     Widget input = client.getWidget(ComponentID.CHATBOX_FULL_INPUT);
     if (input == null) return;
     input.setText(value + "*");

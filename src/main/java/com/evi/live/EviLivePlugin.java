@@ -137,14 +137,17 @@ public class EviLivePlugin extends Plugin {
   // suggestions. Only ever echoes IDs the bridge named itself, so no other inventory contents leave
   // the client. Written by the poll thread, read by the next poll, hence volatile.
   private volatile Set<Integer> bridgePositionItems=Collections.emptySet();
-  // The player's actual current cash stack, read from their own inventory's coins (item 995) on
-  // the client thread every tick and cached here for the background poll thread to read (hence
-  // volatile) -- never fabricated or assumed. -1 means "not yet known" (e.g. before the inventory
-  // has loaded this session), which suggestionQuery() treats as "send no cash figure at all" so a
-  // missing reading never falsely constrains suggestions. Sent to the bridge so it can cap/re-rank
-  // suggestions to trades actually affordable right now, instead of e.g. a huge-margin item at a
-  // quantity that would cost more than the player has, or more than OSRS's own ~2.147bn gp cap.
-  private volatile int cashStack=-1;
+  // The player's actual current spending power, read on the client thread every tick and cached
+  // here for the background poll thread (hence volatile) -- never fabricated or assumed. Since
+  // Jagex's "Beyond Max Cash" update it is their coins (995) PLUS their platinum tokens (13204) at
+  // 1,000 gp each, because the Grand Exchange settles an offer from both together; see
+  // refreshCashStack for the full reasoning and for why this is a long rather than an int.
+  // -1 means "not yet known" (e.g. before the inventory has loaded this session), which
+  // suggestionQuery() treats as "send no cash figure at all" so a missing reading never falsely
+  // constrains suggestions. Note that 0 is a REAL answer -- carrying nothing -- and the bridge
+  // distinguishes the two. Sent to the bridge so it can cap/re-rank suggestions to trades actually
+  // affordable right now, rather than a huge-margin item at a quantity costing more than they hold.
+  private volatile long cashStack=-1;
   // The item ID currently selected in an open GE offer (buy or sell), read from GEOffer on the
   // client thread every tick and cached here (volatile) for the background poll thread, same
   // pattern as cashStack above. -1 means "no GE slot open right now" (GEOffer.currentItemId()
@@ -387,15 +390,27 @@ public class EviLivePlugin extends Plugin {
       heldForResale.remove(n.itemId);
     }
   }
-  // Refreshes cashStack from the inventory's coins every tick. Deliberately its own try/catch so
-  // a container lookup hiccup (e.g. mid-transition between logged-out and logged-in) never breaks
+  // Refreshes cashStack from the inventory every tick. Deliberately its own try/catch so a
+  // container lookup hiccup (e.g. mid-transition between logged-out and logged-in) never breaks
   // the rest of onGameTick -- it just leaves cashStack at its last known value, or -1 if there
-  // never was one. Item ID 995 is Coins; looked up by literal ID rather than a RuneLite ItemID
-  // constant since those move between packages across client versions.
+  // never was one. Both IDs are literals rather than RuneLite ItemID constants, since those move
+  // between packages across client versions.
+  //
+  // COINS (995) PLUS PLATINUM TOKENS (13204, worth 1,000 gp each), as of Jagex's "Beyond Max Cash"
+  // update on 30 September 2026: the Grand Exchange now settles an offer from both currencies
+  // together, so a player's real spending power is the sum. Counting coins alone -- which was
+  // CORRECT the day before, because the GE would not take tokens -- now understates anyone holding
+  // wealth as tokens, and EVI would quietly size their trades as though the tokens were not there.
+  //
+  // This is why cashStack is a long. A coin stack and a token stack are each still capped at
+  // 2,147,483,647, so coins alone always fitted an int; 2.147b coins plus 2.147b tokens is about
+  // 2.149 TRILLION, which does not. Item stack sizes and buy limits were not changed by that
+  // update, so every quantity in this plugin is still safely an int.
   private void refreshCashStack() {
     try {
       net.runelite.api.ItemContainer inv=client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
-      cashStack=inv==null?-1:inv.count(995);
+      if(inv==null){cashStack=-1;return;}
+      cashStack=(long)inv.count(995)+(long)inv.count(13204)*1000L;
     } catch(Exception ex){cashStack=-1;}
   }
   // Refreshes inventoryItemIds (see its own field doc) from the inventory's contents every tick,
@@ -1184,13 +1199,13 @@ public class EviLivePlugin extends Plugin {
   private static String offerDriftHint(ActiveOffer o, Suggestion price) {
     if(price==null || o.price<=0)return null;
     if(o.buying) {
-      int ref=price.buyPrice;
+      long ref=price.buyPrice;
       if(ref<=0)return null;
       double drift=(ref-o.price)/(double)ref; // positive: offer priced below today's market
       if(drift>OFFER_DRIFT_THRESHOLD)
         return String.format("Your buy offer for %s is priced at %,d gp, but today's market is around %,d gp (%.0f%% below) -- it may sit unfilled. Consider cancelling and relisting closer to the market price.",o.name,o.price,ref,drift*100);
     } else {
-      int ref=price.sellPrice;
+      long ref=price.sellPrice;
       if(ref<=0)return null;
       double drift=(o.price-ref)/(double)ref; // positive: offer priced above today's market
       if(drift>OFFER_DRIFT_THRESHOLD)

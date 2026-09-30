@@ -33,8 +33,8 @@ class Suggestion {
   String name;
   String action;
   int quantity;
-  int buyPrice;
-  int sellPrice;
+  long buyPrice;
+  long sellPrice;
   String source;
   String reasoning;
   boolean persisted;
@@ -52,7 +52,7 @@ class Suggestion {
   // null, never estimated. breakEvenPrice: the lowest sell price per unit that doesn't lose GP
   // after GE tax. lossIfSoldNow: set only when selling at sellPrice right now would lose GP, the
   // total GP lost. Shown as a warning; a losing sell is never hidden or blocked.
-  Integer breakEvenPrice;
+  Long breakEvenPrice;
   Long lossIfSoldNow;
   /** What the whole trade is worth after tax, computed by the bridge so the panel does not have to
    *  know the Grand Exchange's tax rules to print the headline figure. Null from an older bridge. */

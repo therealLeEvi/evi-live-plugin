@@ -119,7 +119,7 @@ class SuggestionHintWidget {
     return (s == null || s.isEmpty() || "Not set".equalsIgnoreCase(s)) ? "hotkey" : s;
   }
 
-  private static String format(int value) {
+  private static String format(long value) {
     return String.format("%,d", value);
   }
 }

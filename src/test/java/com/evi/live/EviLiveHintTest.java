@@ -113,7 +113,7 @@ public class EviLiveHintTest {
     check(!shownSell.contains("LOSS"), "A buy-labelled suggestion with no loss data must not warn: " + shownSell);
     // A holding sell that would lose GP: the hint still offers the price (never blocked) but says so.
     Suggestion losing = EviLiveSuggestionTest.suggestion(1, "sell", 100, 50, 65);
-    losing.lossIfSoldNow = 1100L; losing.breakEvenPrice = 1234;
+    losing.lossIfSoldNow = 1100L; losing.breakEvenPrice = 1234L;
     cache.set(losing);
     hint.update();
     String shownLoss = fc.chatboxContainer.createdChildren.get(0).text;

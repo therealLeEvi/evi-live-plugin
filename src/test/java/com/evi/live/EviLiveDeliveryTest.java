@@ -18,6 +18,17 @@ public final class EviLiveDeliveryTest {
     Field field=target.getClass().getDeclaredField(name);field.setAccessible(true);return field.get(target);
   }
   static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
+  /** A plugin whose inventory reports exactly these many coins (995) and platinum tokens (13204),
+   *  so refreshCashStack can be exercised without a real client. */
+  static EviLivePlugin pluginHolding(int coins,int plat) throws Exception {
+    java.lang.reflect.InvocationHandler container=(pr,m,ar)->
+      m.getName().equals("count") ? (Integer.valueOf(995).equals(ar[0]) ? coins : Integer.valueOf(13204).equals(ar[0]) ? plat : 0) : null;
+    java.lang.reflect.InvocationHandler cl=(pr,m,ar)->m.getName().equals("getItemContainer")
+      ?java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.ItemContainer.class.getClassLoader(),new Class[]{net.runelite.api.ItemContainer.class},container):null;
+    EviLivePlugin p=new EviLivePlugin();
+    set(p,"client",java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.Client.class.getClassLoader(),new Class[]{net.runelite.api.Client.class},cl));
+    return p;
+  }
   static final class Fake implements LocalTransport {
     int code=200;boolean fail;List<String> bodies=new ArrayList<>();
     public int send(String key,String json)throws IOException {
@@ -420,6 +431,30 @@ public final class EviLiveDeliveryTest {
     set(unreadable,"client",null);
     refreshInInstance.invoke(unreadable);
     check(Boolean.FALSE.equals(get(unreadable,"inInstance")),"A failed world-view read must clear the flag, never leave a stale instance set");
+
+    // refreshCashStack(): coins PLUS platinum tokens, as of Jagex's "Beyond Max Cash" update on
+    // 30 Sept 2026. The Grand Exchange now settles an offer from both currencies together, so
+    // counting coins alone -- correct the day before -- understates anyone holding wealth as tokens
+    // and would quietly size their trades as though the tokens were not there.
+    Method refreshCash=EviLivePlugin.class.getDeclaredMethod("refreshCashStack");
+    refreshCash.setAccessible(true);
+    EviLivePlugin coinsOnly=pluginHolding(500_000,0);
+    refreshCash.invoke(coinsOnly);
+    check(Long.valueOf(500_000L).equals(get(coinsOnly,"cashStack")),"Coins alone are counted as before: "+get(coinsOnly,"cashStack"));
+    EviLivePlugin mixed=pluginHolding(1_500,7);
+    refreshCash.invoke(mixed);
+    check(Long.valueOf(8_500L).equals(get(mixed,"cashStack")),"Seven platinum tokens are 7,000 gp on top of 1,500 coins: "+get(mixed,"cashStack"));
+    // The reason cashStack had to become a long: each stack is still capped at 2,147,483,647, but
+    // both together reach about 2.149 TRILLION, which an int cannot hold.
+    EviLivePlugin maxed=pluginHolding(2_147_483_647,2_147_483_647);
+    refreshCash.invoke(maxed);
+    check(Long.valueOf(2_149_631_130_647L).equals(get(maxed,"cashStack")),
+      "A full coin stack plus a full token stack must not overflow: "+get(maxed,"cashStack"));
+    EviLivePlugin noInventory=new EviLivePlugin();
+    set(noInventory,"client",null);
+    set(noInventory,"cashStack",123L);
+    refreshCash.invoke(noInventory);
+    check(Long.valueOf(-1L).equals(get(noInventory,"cashStack")),"An unreadable inventory means UNKNOWN (-1), never zero -- zero would mean 'afford nothing'");
 
     // account: the same identifier already sent with every ingest packet, not a config setting --
     // left off the query entirely before the first login this process has seen (null, the
@@ -1052,6 +1087,6 @@ public final class EviLiveDeliveryTest {
       check(!other.contains("Wrong key"),"Only a 401 may be reported as a wrong key, not status "+st);
     }
 
-    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the accept-suggestion callback (the pick left on screen and not set aside, the toggle, the no-op without a bridge-issued id, and the AcceptRequest JSON shape), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, the 401-versus-unreachable distinction (a rejected key names which of the two printed keys to use and is never called unreachable; every other status keeps the unreachable wording), and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
+    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the accept-suggestion callback (the pick left on screen and not set aside, the toggle, the no-op without a bridge-issued id, and the AcceptRequest JSON shape), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, the cash stack counting coins AND platinum tokens at 1,000 gp each without overflowing (a full stack of both is ~2.149 trillion) and reporting -1 rather than 0 when the inventory cannot be read, the 401-versus-unreachable distinction (a rejected key names which of the two printed keys to use and is never called unreachable; every other status keeps the unreachable wording), and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
   }
 }

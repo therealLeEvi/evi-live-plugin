@@ -22,14 +22,14 @@ repositories {
 // local check and then failed the Hub's build: 1.13.0 widened GrandExchangeOffer.getPrice() and
 // getSpent() from int to long. Read it before any release:
 //     curl -s https://raw.githubusercontent.com/runelite/plugin-hub/master/runelite.version
-def runeLiteVersion = '1.13.0'
+def runeLiteVersion = '1.13.1'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.10.1'
+version = '3.10.2'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
