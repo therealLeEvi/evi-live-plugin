@@ -42,7 +42,9 @@ public class EviLiveHintTest {
     // with the title still empty, which is what made the gate breakable by a number Jagex owns.
     check(!geOffer.isPromptOpen(), "Slot open but no prompt title: nothing is being asked for");
     fc.chatboxTitle.text = "Set a price for each item:";
-    check(geOffer.isPromptOpen(), "Slot open and the chatbox asking for a price: the prompt is open");
+    check(!geOffer.isPromptOpen(), "Asking for a price with no item chosen yet: not an open prompt");
+    fc.currentItemId = 1;
+    check(geOffer.isPromptOpen(), "Slot open, an item chosen and the chatbox asking for a price: the prompt is open");
     // THE REGRESSION TEST. "Beyond Max Cash" changed the price prompt's input type from 7 to 30 on
     // 30 Sept 2026 and the gate went permanently false, killing the price hint and hotkey for every
     // user. Measured in the client: title="Set a price for each item:" inputType=30. The input type
@@ -60,6 +62,16 @@ public class EviLiveHintTest {
     fc.chatboxTitle.text = "Set a price for each item:";
     fc.inputType = 0;
     check(!geOffer.isPromptOpen(), "A stale prompt title with no active chatbox input is not an open prompt");
+    // THE SECOND REGRESSION TEST. The stale title also survives into the ITEM SEARCH, where the
+    // search box IS an active input (the client reported inputType=14, currentItem=-1). Reading
+    // that as an open price prompt made SuggestionItemSelectWidget -- which uses isPromptOpen as a
+    // NEGATIVE gate -- stop drawing the clickable suggestion row. That shipped in the first 3.10.3
+    // commit. A quantity or price is always asked about a CHOSEN item; the search has none.
+    fc.inputType = 14;
+    fc.currentItemId = -1;
+    check(!geOffer.isPromptOpen(), "Item search with a stale prompt title is not an open prompt");
+    fc.currentItemId = 1;
+    check(geOffer.isPromptOpen(), "Once an item is chosen and the chatbox is asking, the prompt is open");
     fc.inputType = 7;
 
     fc.currentItemId = 1;

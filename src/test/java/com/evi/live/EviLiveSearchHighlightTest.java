@@ -93,6 +93,7 @@ public class EviLiveSearchHighlightTest {
     // own value stopped being reliable on 30 Sept 2026 (the price prompt went from 7 to 30).
     fc.inputType = 7;
     fc.chatboxTitle.text = "Set a price for each item:";
+    fc.currentItemId = 2; // chosen, but not the suggested item -- see the note in the sibling test
     BufferedImage promptOpen = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
     overlay.render(promptOpen.createGraphics());
     check(!painted(promptOpen, 10, 15), "Already at the quantity/price prompt: the row highlight must not paint (SuggestionHintWidget's job now)");

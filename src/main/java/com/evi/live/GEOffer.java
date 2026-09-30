@@ -110,14 +110,34 @@ class GEOffer {
    * survivable: Jagex renumbering the prompt cannot close the gate, and only retiring the chatbox
    * input mechanism entirely could.
    *
-   * <p>Both halves are needed, and the probe showed why. A title alone is NOT enough: the title
-   * widget KEEPS its text after the prompt closes, so the client reported
+   * <p>All three halves are needed, and the stale title is why. The title widget KEEPS its text
+   * after the prompt closes, so the client reported
    * {@code title="Set a price for each item:" inputType=0 currentItem=-1} with nothing open at all.
-   * Gating on the text alone would call that an open prompt and hide the search row over it.
+   * Two different things then go wrong if the other two are missing, and BOTH were seen for real:
+   *
+   * <ul>
+   *   <li>without the active-input test, that stale line reads as an open prompt with the chatbox
+   *       shut;</li>
+   *   <li>without the chosen-item test, the ITEM SEARCH reads as an open price prompt -- the search
+   *       box is an active input ({@code inputType=14}) and the title is still stale, so
+   *       isPromptOpen() went true during the search and SuggestionItemSelectWidget, which uses this
+   *       as a NEGATIVE gate, stopped drawing the clickable suggestion row. That regression shipped
+   *       in the first 3.10.3 commit and was reported by novi within minutes.</li>
+   * </ul>
+   *
+   * <p>A quantity or price is always asked about a CHOSEN item; during the search none is chosen
+   * ({@code currentItemId() == -1}). That is a fact about the prompt rather than another number
+   * Jagex can renumber, which is why it is the right third test.
+   *
+   * <p>NOTE for anyone changing this: isPromptOpen() is a negative gate in
+   * SuggestionItemSelectWidget and SuggestionSearchHighlightOverlay and a positive one in
+   * SuggestionHintWidget and SuggestionKeybindHandler. Loosening it does not merely show more --
+   * it HIDES the search row and the highlight. Check all four call sites, in the client.
    */
   boolean isPromptOpen() {
     return (isSettingQuantity() || isSettingPrice())
       && anyChatboxInputActive()
+      && currentItemId() > 0
       && client.getWidget(ComponentID.GRAND_EXCHANGE_OFFER_CONTAINER) != null
       && isSlotOpen();
   }

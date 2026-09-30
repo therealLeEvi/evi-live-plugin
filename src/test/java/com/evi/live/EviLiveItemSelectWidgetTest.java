@@ -62,6 +62,10 @@ public class EviLiveItemSelectWidgetTest {
     // meaning that on 30 Sept 2026, when the price prompt's own value went from 7 to 30.
     fc.inputType = 7;
     fc.chatboxTitle.text = "Set a price for each item:";
+    // A DIFFERENT item from the suggested one (1), deliberately: currentItemId == s.itemId would
+    // clear the row for its own reason and the prompt gate would prove nothing. An open prompt
+    // needs a chosen item, since the stale title alone also survives into the item search.
+    fc.currentItemId = 2;
     widget.update();
     check(fc.searchResults.createdChildren.isEmpty(), "Already at the quantity/price prompt: nothing must be created");
     fc.inputType = 30; // the post-update value: it must gate the same way

@@ -989,8 +989,27 @@ public final class EviLiveDeliveryTest {
     poll.invoke(pollPlugin,1L); // sender is null here (startUp() never ran): the auto-retry attempt must not throw
     @SuppressWarnings("unchecked")
     java.util.Set<Integer> pollPluginSkips=(java.util.Set<Integer>)get(pollPlugin,"skippedItemIds");
-    check(pollPluginSkips.contains(5),"A persisted suggestion for an item genuinely absent from the inventory must be auto-skipped, exactly like a manual skip");
+    @SuppressWarnings("unchecked")
+    java.util.Set<Integer> pollPluginUnverifiable=(java.util.Set<Integer>)get(pollPlugin,"unverifiableItemIds");
+    check(pollPluginUnverifiable.contains(5),"A persisted suggestion for an item not in the inventory must be held back for this poll");
+    // NOT the manual-skip list, which is the whole point. It used to go there, and a buy that has
+    // FILLED but not been COLLECTED is not in the inventory -- so a poll landing in that window
+    // excluded the item until RuneLite restarted, and collecting it changed nothing. novi hit this
+    // twice; the second time the bridge was answering "sell 1 Gilded d'hide vambraces ... +254,063"
+    // while the plugin dropped it. A transient condition must not cause a permanent exclusion.
+    check(!pollPluginSkips.contains(5),"...and must NOT enter the manual-skip list, which lasts the whole session");
     check(get(pollPlugin,"suggestionCache")==null,"The rejected phantom suggestion must never reach suggestionCache (left uninitialized/untouched in this harness)");
+
+    // The exclusion lasts exactly until the inventory changes -- collecting the filled buy IS that
+    // event. Without this the new set would just be a slower version of the blacklist it replaced.
+    pollPlugin.dropUnverifiableOnInventoryChange(java.util.Set.of());
+    check(pollPluginUnverifiable.contains(5),"An unchanged inventory must not clear the hold-back");
+    pollPlugin.dropUnverifiableOnInventoryChange(java.util.Set.of(5));
+    check(pollPluginUnverifiable.isEmpty(),"The item arriving in the inventory must clear the hold-back");
+    pollPluginUnverifiable.add(5);
+    pollPlugin.dropUnverifiableOnInventoryChange(java.util.Set.of(99));
+    check(pollPluginUnverifiable.isEmpty(),"Any inventory change clears it, not only the item's own arrival");
+    set(pollPlugin,"inventoryItemIds",java.util.Set.of()); // restore for anything after this block
 
     // The same suggestion, but the item genuinely IS in the inventory: must be trusted and cached
     // normally, exactly as an unpersisted (live-observed) suggestion always has been.

@@ -92,6 +92,19 @@ public class EviLivePlugin extends Plugin {
   // again right after you've already acted on it -- the sidebar previously had no way to know an
   // offer had been placed.
   private final Set<Integer> skippedItemIds=ConcurrentHashMap.newKeySet();
+  // unverifiableItemIds: a reconstructed holding the bridge offered that was NOT in the inventory
+  // when we looked. Held back only until the inventory next changes, never for the session.
+  //
+  // It used to go into skippedItemIds, which is the list the player fills by pressing "Skip", and
+  // that was wrong in a way that reached every user: a buy that has FILLED but not yet been
+  // COLLECTED is not in the inventory, so a poll landing in that window excluded the item until
+  // RuneLite was restarted. Collecting it changed nothing, because EVI never asked again. novi hit
+  // this twice -- a Dagon'hai hat on 29 Sept and 1 Gilded d'hide vambraces on 30 Sept, where the
+  // bridge was answering "sell 1 Gilded d'hide vambraces ... +254,063" the whole time and the
+  // plugin was dropping it on the floor. A transient condition must not cause a permanent exclusion,
+  // and this one was invisible as well as permanent: the early return below skipped the line that
+  // updates the skipped count, so "Show skipped items again" never even appeared.
+  private final Set<Integer> unverifiableItemIds=ConcurrentHashMap.newKeySet();
   private volatile Set<Integer> activeSlotItemIds=Collections.emptySet();
   // A lighter, immutable snapshot of only the still-in-progress (non-terminal: BUYING or SELLING,
   // not yet fully filled/cancelled) offers among the same slots[] activeSlotItemIds is built from --
@@ -363,7 +376,7 @@ public class EviLivePlugin extends Plugin {
     } catch(Throwable ignored){ inInstance=false; }
   }
 
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -431,10 +444,26 @@ public class EviLivePlugin extends Plugin {
         ids.add(resolvedId);
         quantities.merge(resolvedId,item.getQuantity(),Integer::sum);
       }
+      // A holding EVI could not see may be in hand NOW -- collecting a filled buy is exactly this
+      // event -- so the moment the inventory changes at all, every such exclusion is dropped and the
+      // item becomes eligible again on the next poll. This is what keeps the exclusion transient;
+      // without it the set would simply be a slower version of the session blacklist it replaced.
+      dropUnverifiableOnInventoryChange(ids);
       inventoryItemIds=ids;
       inventoryQuantities=quantities;
       inventorySnapshotEstablished=true;
     } catch(Exception ignored){} // leave the previous snapshot in place
+  }
+  /** A holding EVI could not see may be in hand NOW -- collecting a filled buy is exactly this
+   *  event -- so the moment the inventory's composition changes, every such exclusion is dropped and
+   *  the item is eligible again on the next poll. This is what keeps the exclusion transient; without
+   *  it the set would be a slower version of the session blacklist it replaced.
+   *
+   *  Its own method so it can be tested without a client: the surrounding refreshInventory() needs a
+   *  real ItemContainer, and an untestable clear is how a transient exclusion quietly becomes a
+   *  permanent one again. */
+  void dropUnverifiableOnInventoryChange(Set<Integer> ids) {
+    if(!unverifiableItemIds.isEmpty() && !ids.equals(inventoryItemIds))unverifiableItemIds.clear();
   }
   // A noted item's own ItemContainer/Item.getId() is a DIFFERENT item ID from the unnoted item it
   // represents -- confirmed against a real report (11 noted "Contract of glyphic attenuation" in
@@ -712,7 +741,7 @@ public class EviLivePlugin extends Plugin {
       // touches suggestionCache/openItemPriceCache here, so whatever they already held (a prior
       // valid suggestion, or nothing) is left exactly as it was until the retry resolves.
       if(s!=null && s.persisted && !verifyPersistedHolding(s)) {
-        skippedItemIds.add(s.itemId);
+        unverifiableItemIds.add(s.itemId);
         if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
         return;
       }
@@ -1007,6 +1036,9 @@ public class EviLivePlugin extends Plugin {
     // iteration order.
     Set<Integer> exclude=new TreeSet<>(activeSlotItemIds);
     exclude.addAll(skippedItemIds);
+    // Held back for this poll only, so the bridge moves on to its next candidate instead of
+    // repeating one we already know we cannot verify. Cleared on the next inventory change.
+    exclude.addAll(unverifiableItemIds);
     if(!exclude.isEmpty()) {
       if(q.length()>0)q.append('&');
       q.append("exclude=");
