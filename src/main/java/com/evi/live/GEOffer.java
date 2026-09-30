@@ -18,7 +18,6 @@ import net.runelite.api.widgets.Widget;
 @Singleton
 class GEOffer {
   private static final int CURRENTLY_OPEN_GE_SLOT_VARBIT_ID = 4439;
-  private static final int OFFER_TYPE_CHILD_ID = 20;
 
   /** Which single field, if any, a cached suggestion is currently eligible to be shown/filled for. */
   enum PromptField { NONE, QUANTITY, BUY_PRICE, SELL_PRICE }
@@ -31,9 +30,40 @@ class GEOffer {
   boolean isSelling() { return client.getVarbitValue(Varbits.GE_OFFER_CREATION_TYPE) == 1; }
 
   private Widget chatboxTitle() { return client.getWidget(ComponentID.CHATBOX_TITLE); }
+
+  /** Does the open offer panel identify itself as a buy or a sell offer?
+   *
+   *  SEARCHES the container's children rather than indexing a fixed child (OFFER_TYPE_CHILD_ID = 20
+   *  until 30 September 2026). **That index was NOT what broke** -- a probe in the client the same
+   *  day found "Buy offer" still sitting at child 20 after the "Beyond Max Cash" update, so the old
+   *  code read it correctly. The real fault was INPUT_TYPE, in isPromptOpen(). This was changed on a
+   *  wrong diagnosis, and is kept only because it is genuinely more robust than a magic index into
+   *  an interface Jagex owns and reshapes: the panel gained two currency rows that day, and the next
+   *  such change may well move it.
+   *
+   *  Returns null only when no child says either. Callers must treat that as "cannot tell from the
+   *  widget", NOT as "not an offer screen" -- see isSettingPrice, which falls back to the varbit. */
   private Widget offerTypeWidget() {
     Widget container = client.getWidget(ComponentID.GRAND_EXCHANGE_OFFER_CONTAINER);
-    return container == null ? null : container.getChild(OFFER_TYPE_CHILD_ID);
+    if (container == null) return null;
+    Widget found = findOfferType(container.getChildren());
+    return found != null ? found : findOfferType(container.getDynamicChildren());
+  }
+
+  /** Both child arrays are searched, and BOTH have to be, because an EMPTY array is not a null one.
+   *  The first version of this searched getDynamicChildren() and only fell back to getChildren()
+   *  when it was null -- but a container with no dynamic children answers with a zero-length array,
+   *  not null, so the fallback never ran and the search found nothing. getChildren() is searched
+   *  first because that is the array the old fixed index read (Widget.getChild indexes it), so the
+   *  offer type provably lives there. */
+  private static Widget findOfferType(Widget[] children) {
+    if (children == null) return null;
+    for (Widget child : children) {
+      if (child == null) continue;
+      String text = child.getText();
+      if ("Buy offer".equals(text) || "Sell offer".equals(text)) return child;
+    }
+    return null;
   }
 
   /** True only while the "How many do you wish to buy/sell?" quantity prompt is the open chatbox input. */
@@ -44,27 +74,58 @@ class GEOffer {
     return "How many do you wish to buy?".equals(text) || "How many do you wish to sell?".equals(text);
   }
 
-  /** True only while the "Set a price for each item:" prompt is the open chatbox input. */
+  /** True only while the "Set a price for each item:" prompt is the open chatbox input.
+   *
+   *  The offer-type widget is a CROSS-CHECK, never the thing that decides. When it cannot be found
+   *  the varbit decides instead, because that is what openFieldFor goes on to read anyway
+   *  (isBuying/isSelling, Varbits.GE_OFFER_CREATION_TYPE) -- so refusing here on a missing widget
+   *  withhold a price EVI had already worked out, on the strength of a lookup that adds nothing the
+   *  varbit does not already say. A widget that IS found and says something else still refuses:
+   *  that is a positive signal we are looking at the wrong screen, which absence is not. */
   boolean isSettingPrice() {
     Widget title = chatboxTitle();
     if (title == null || !"Set a price for each item:".equals(title.getText())) return false;
     Widget offerType = offerTypeWidget();
-    if (offerType == null) return false;
+    if (offerType == null) return isBuying() || isSelling();
     String text = offerType.getText();
     return "Buy offer".equals(text) || "Sell offer".equals(text);
   }
 
   /**
-   * True only while the open chatbox is genuinely the GE quantity/price prompt: the same gate a
-   * currently published Hub plugin uses before touching or drawing over anything (VarClientInt.
-   * INPUT_TYPE == 7 is the GE quantity/price chatbox, not just any open chatbox), plus a GE slot
+   * True only while the open chatbox is genuinely the GE quantity/price prompt, plus a GE slot
    * actually open. Independent of whether any suggestion currently matches.
+   *
+   * <p>This asks the chatbox what prompt it IS -- by its own title text -- rather than reading
+   * VarClientInt.INPUT_TYPE and comparing it to a magic number. It used to require
+   * {@code INPUT_TYPE == 7}, copied from a currently published Hub plugin, and Jagex's
+   * "Beyond Max Cash" update on 30 September 2026 changed the PRICE prompt's input type to 30
+   * while leaving the quantity prompt's alone. The gate went permanently false for prices, so the
+   * price hint and the hotkey fill died silently for every user while quantity kept working.
+   * Measured in the client, not inferred: the probe read
+   * {@code title="Set a price for each item:" inputType=30}.
+   *
+   * <p>The input type is still read, but as a BOOLEAN -- "is any chatbox input active at all"
+   * (non-zero) -- never as an identity. Which prompt it is comes from the title, which the code
+   * already depends on exactly (isSettingQuantity/isSettingPrice). That split is what makes this
+   * survivable: Jagex renumbering the prompt cannot close the gate, and only retiring the chatbox
+   * input mechanism entirely could.
+   *
+   * <p>Both halves are needed, and the probe showed why. A title alone is NOT enough: the title
+   * widget KEEPS its text after the prompt closes, so the client reported
+   * {@code title="Set a price for each item:" inputType=0 currentItem=-1} with nothing open at all.
+   * Gating on the text alone would call that an open prompt and hide the search row over it.
    */
   boolean isPromptOpen() {
-    return chatboxTitle() != null
-      && client.getVarcIntValue(VarClientInt.INPUT_TYPE) == 7
+    return (isSettingQuantity() || isSettingPrice())
+      && anyChatboxInputActive()
       && client.getWidget(ComponentID.GRAND_EXCHANGE_OFFER_CONTAINER) != null
       && isSlotOpen();
+  }
+
+  /** Is the chatbox accepting input at all? Zero means none is open; every other value is some
+   *  kind of input, and WHICH kind is deliberately not asked -- see isPromptOpen. */
+  private boolean anyChatboxInputActive() {
+    return client.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
   }
 
   /**

@@ -37,7 +37,30 @@ public class EviLiveHintTest {
     check(geOffer.openFieldFor(EviLiveSuggestionTest.suggestion(1, "buy", 100, 50, 65)) == GEOffer.PromptField.NONE, "No slot open: no field");
 
     fc.openSlotVarbit = 1;
-    check(geOffer.isPromptOpen(), "Slot open with the quantity/price input type and both widgets present must be open");
+    // A slot being open is not a prompt being open: until the chatbox names one of the four GE
+    // prompts, nothing is being asked for. This used to pass on VarClientInt.INPUT_TYPE == 7 alone,
+    // with the title still empty, which is what made the gate breakable by a number Jagex owns.
+    check(!geOffer.isPromptOpen(), "Slot open but no prompt title: nothing is being asked for");
+    fc.chatboxTitle.text = "Set a price for each item:";
+    check(geOffer.isPromptOpen(), "Slot open and the chatbox asking for a price: the prompt is open");
+    // THE REGRESSION TEST. "Beyond Max Cash" changed the price prompt's input type from 7 to 30 on
+    // 30 Sept 2026 and the gate went permanently false, killing the price hint and hotkey for every
+    // user. Measured in the client: title="Set a price for each item:" inputType=30. The input type
+    // must no longer be able to decide this, whatever value Jagex gives it next.
+    fc.inputType = 30;
+    check(geOffer.isPromptOpen(), "A changed input type must not close the prompt (30 = the real post-update value)");
+    fc.inputType = 12345;
+    check(geOffer.isPromptOpen(), "No input-type value may close a prompt the chatbox itself is showing");
+    fc.inputType = 7;
+    fc.chatboxTitle.text = "";
+    check(!geOffer.isPromptOpen(), "The old input type alone must not open a prompt either");
+    // ...and the title alone must not either, because the title widget KEEPS its text after the
+    // prompt closes. Measured in the client: title="Set a price for each item:" inputType=0
+    // currentItem=-1, with nothing open. Treating that as an open prompt would hide the search row.
+    fc.chatboxTitle.text = "Set a price for each item:";
+    fc.inputType = 0;
+    check(!geOffer.isPromptOpen(), "A stale prompt title with no active chatbox input is not an open prompt");
+    fc.inputType = 7;
 
     fc.currentItemId = 1;
     fc.chatboxTitle.text = "How many do you wish to buy?";

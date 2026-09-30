@@ -64,6 +64,11 @@ public class EviLiveSuggestionTest {
           case "setHidden": hidden = (Boolean) a[0]; return null;
           case "getBounds": return bounds;
           case "getDynamicChildren": return dynamicChildren.stream().map(FakeWidget::proxy).toArray(Widget[]::new);
+          // The fixed-index children as an array, which is what a caller searching for a child by
+          // its TEXT rather than its index reads (GEOffer.offerTypeWidget). Without this the fake
+          // answered an empty array and such a search could never find anything, so a test would
+          // pass on the fallback path and never exercise the search at all.
+          case "getChildren": return children.values().stream().map(FakeWidget::proxy).toArray(Widget[]::new);
           case "setOnOpListener": onOpArgs = (Object[]) a[0]; return null;
           case "setOnKeyListener": onKeyArgs = (Object[]) a[0]; return null;
           case "setName": name = (String) a[0]; return null;
@@ -191,10 +196,36 @@ public class EviLiveSuggestionTest {
     fill.invoke(handler);
     check("50*".equals(fc.chatboxInput.text), "Hotkey must fill the exact suggested buy price");
 
+    // The offer type is found by its TEXT, not by a fixed child index. Jagex's "Beyond Max Cash"
+    // update on 30 Sept 2026 rebuilt that panel to show two currencies, which shifted every child
+    // after the inserted widgets: child 20 stopped being the offer type, isSettingPrice() went
+    // permanently false, and the price hint and hotkey died silently for every user while the
+    // quantity prompt kept working. The wording never changed -- a screenshot showed "Buy offer"
+    // exactly as before, just somewhere else. Moving it here must change nothing.
+    fc.chatboxInput.text = "";
+    fc.offerContainer.children.clear();
+    // Something else now occupies the old index -- the running two-currency total the update added.
+    // This is the distinguishing case: a fixed-index read finds THIS and refuses, where finding
+    // nothing at all would have fallen through to the varbit and filled anyway, so a test that only
+    // moved the label would have passed against the very bug it was written for.
+    fc.offerContainer.children.put(20, new FakeWidget());
+    fc.offerContainer.children.get(20).text = "1,589,329 coins";
+    fc.offerContainer.children.put(37, new FakeWidget());
+    fc.offerContainer.children.get(37).text = "Buy offer";
+    fill.invoke(handler);
+    check("50*".equals(fc.chatboxInput.text), "The offer type must be found wherever it sits, not only at one index: " + fc.chatboxInput.text);
+    // And with no offer-type widget findable at all, the varbit decides rather than the price being
+    // withheld -- refusing on absence is what turned one interface change into a dead feature.
+    fc.chatboxInput.text = "";
+    fc.offerContainer.children.clear();
+    fill.invoke(handler);
+    check("50*".equals(fc.chatboxInput.text), "With no offer-type widget, the varbit must still decide: " + fc.chatboxInput.text);
+
     // Price prompt, same item, but the player is actually selling: this is the same flip's other
     // side, so it must fill the suggestion's SELL price, not stay empty and not reuse the buy price.
     fc.chatboxInput.text = "";
     fc.offerCreationType = 1; // selling
+    fc.offerContainer.children.put(20, new FakeWidget()); // restored: the block above emptied it
     fc.offerContainer.children.get(20).text = "Sell offer";
     fill.invoke(handler);
     check("65*".equals(fc.chatboxInput.text), "Hotkey must fill the exact suggested sell price while selling the same item");

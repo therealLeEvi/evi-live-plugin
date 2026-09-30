@@ -89,11 +89,19 @@ public class EviLiveSearchHighlightTest {
     check(!painted(noSlot, 10, 15), "No GE slot open: nothing must be painted even with a matching row cached");
     fc.openSlotVarbit = 1;
 
-    fc.inputType = 7; // the real quantity/price chatbox input type: already past item-picking
+    // An open prompt is an ACTIVE chatbox input whose title names a GE prompt; the input type's
+    // own value stopped being reliable on 30 Sept 2026 (the price prompt went from 7 to 30).
+    fc.inputType = 7;
+    fc.chatboxTitle.text = "Set a price for each item:";
     BufferedImage promptOpen = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
     overlay.render(promptOpen.createGraphics());
     check(!painted(promptOpen, 10, 15), "Already at the quantity/price prompt: the row highlight must not paint (SuggestionHintWidget's job now)");
+    fc.inputType = 30; // the post-update value
+    BufferedImage renumbered = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
+    overlay.render(renumbered.createGraphics());
+    check(!painted(renumbered, 10, 15), "A renumbered prompt is still a prompt: the row highlight must not paint");
     fc.inputType = 0;
+    fc.chatboxTitle.text = "";
 
     fc.currentItemId = 1; // the suggested item is already the one selected
     BufferedImage alreadySelected = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);

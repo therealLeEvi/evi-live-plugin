@@ -57,10 +57,18 @@ public class EviLiveItemSelectWidgetTest {
     check(fc.searchResults.createdChildren.isEmpty(), "No cached suggestion: nothing must be created");
 
     cache.set(EviLiveSuggestionTest.suggestion(1, "buy", 100, 50, 65));
-    fc.inputType = 7; // the real quantity/price prompt: already past item-picking
+    // The real quantity/price prompt: already past item-picking. An open prompt is an ACTIVE
+    // chatbox input (non-zero) whose title names a GE prompt -- the input type alone stopped
+    // meaning that on 30 Sept 2026, when the price prompt's own value went from 7 to 30.
+    fc.inputType = 7;
+    fc.chatboxTitle.text = "Set a price for each item:";
     widget.update();
     check(fc.searchResults.createdChildren.isEmpty(), "Already at the quantity/price prompt: nothing must be created");
+    fc.inputType = 30; // the post-update value: it must gate the same way
+    widget.update();
+    check(fc.searchResults.createdChildren.isEmpty(), "A renumbered prompt is still a prompt: nothing must be created");
     fc.inputType = 0;
+    fc.chatboxTitle.text = "";
 
     fc.currentItemId = 1; // the suggested item is already the one selected
     widget.update();

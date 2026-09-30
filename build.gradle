@@ -29,7 +29,7 @@ dependencies {
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.10.2'
+version = '3.10.3'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
