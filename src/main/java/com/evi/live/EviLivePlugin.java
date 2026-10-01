@@ -154,7 +154,11 @@ public class EviLivePlugin extends Plugin {
   //
   // Deliberately NOT a failure. An older bridge works; it simply does less. The message says the app
   // is behind, never that anything is broken, and nothing is withheld because of it.
-  static final int EXPECTED_BRIDGE_API=2;
+  // 3 as of 1 Oct 2026: the stale-support cap, which stops a headline profit being quoted at a price
+  // buyers have stopped paying. Raised BEFORE 3.11.0 shipped rather than waiting for a later release
+  // -- the plugin is the slow half, and a bridge-only fix can only be announced by a plugin, so the
+  // chance to tell people was now or indefinitely later.
+  static final int EXPECTED_BRIDGE_API=3;
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
