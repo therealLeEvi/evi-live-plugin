@@ -76,6 +76,8 @@ final class EviLivePanel extends PluginPanel {
   private String shownAlso = "";
   /** The advice about offers already placed, one small card each. */
   private final JPanel adviceList = new JPanel();
+  /** "Your companion app is out of date", under the connection line. Hidden when there is nothing to say. */
+  private final JTextArea staleBridge = new JTextArea();
   /** What the list currently shows, so a poll that changes nothing does not relayout the sidebar. */
   private String shownAdvice = "";
   // Held so suggestionWarning can recolour its accent stripe, exactly as an offer row carries its own.
@@ -306,7 +308,40 @@ final class EviLivePanel extends PluginPanel {
     strip.add(status, BorderLayout.CENTER);
     content.add(strip);
 
+    // Directly under the connection line, at novi's request on 1 Oct 2026: it is a fact ABOUT the
+    // connection, not advice about a trade, so it belongs beside the thing it describes rather than
+    // at the top of the advice list competing with offers. Hidden until there is something to say.
+    staleBridge.setVisible(false);
+    staleBridge.setAlignmentX(Component.LEFT_ALIGNMENT);
+    staleBridge.setFont(FontManager.getRunescapeSmallFont());
+    staleBridge.setLineWrap(true);
+    staleBridge.setWrapStyleWord(true);
+    staleBridge.setEditable(false);
+    staleBridge.setFocusable(false);
+    staleBridge.setOpaque(false);
+    // The same caret rule every other sidebar text area follows: a JTextArea's default caret chases
+    // setText and drags the sidebar with it on every poll. Caught by panelTest the moment this was
+    // added, which is exactly what that test is for.
+    ((DefaultCaret) staleBridge.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
+    staleBridge.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+    role(staleBridge, "warn");
+    content.add(staleBridge);
+
     add(content, BorderLayout.NORTH);
+  }
+
+  /** The companion app is older than this plugin. Null or empty hides the line entirely.
+   *
+   *  Sits under the connection status rather than in the advice list: an advice card is about an
+   *  offer, and this is about the connection the whole panel depends on. EDT only. */
+  void staleBridge(String message) {
+    SwingUtilities.invokeLater(() -> {
+      boolean show = message != null && !message.isEmpty();
+      if (show) setIfChanged(staleBridge, message);
+      staleBridge.setVisible(show);
+      staleBridge.revalidate();
+      staleBridge.repaint();
+    });
   }
 
   void status(String message) {
@@ -509,7 +544,17 @@ final class EviLivePanel extends PluginPanel {
           adviceList.add(plain);
           continue;
         }
-        Color edge = "warn".equals(c.level) ? p.bad : p.warn;
+        // Three tones, not two. "warn" is red, "info" is the THEME'S OWN TEXT colour, and anything
+        // else is amber. Before 1 Oct 2026 there were only two, so every card that was not a warning
+        // drew amber -- and the holdings lines added 30 Sept ("you're holding 1 Gilded d'hide
+        // vambraces, +254,063 over cost") therefore looked exactly like "your sell is below
+        // break-even". A plain statement of what you own must not wear a warning's colour.
+        //
+        // The theme's text colour rather than a literal white: that is near-white under RuneLite's
+        // scheme and a parchment cream under the Old School one, so it stays right in both. Green is
+        // deliberately not an option here -- it already means a FILLED offer in the Active offers
+        // list (ColorScheme.PROGRESS_COMPLETE_COLOR) and a positive profit figure.
+        Color edge = "warn".equals(c.level) ? p.bad : "info".equals(c.level) ? p.text : p.warn;
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);

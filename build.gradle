@@ -29,7 +29,7 @@ dependencies {
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.10.3'
+version = '3.11.0'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -40,6 +40,11 @@ tasks.register('run', JavaExec) {
 tasks.register('observationTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.EviLiveObservationTest'
+}
+
+tasks.register('gamevalTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.GamevalConstantsTest'
 }
 
 tasks.register('pairingTest', JavaExec) {
@@ -79,4 +84,7 @@ tasks.register('itemSelectTest', JavaExec) {
     mainClass = 'com.evi.live.EviLiveItemSelectWidgetTest'
     systemProperty 'java.awt.headless', 'true'
 }
-tasks.named('check') { dependsOn 'observationTest', 'pairingTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest' }
+// gamevalTest asserts every client id in GeIds equals the deprecated constant it replaced. It is in
+// `check` deliberately: the ids are the one thing in this plugin a game update can silently move
+// under us, which is exactly what happened on 30 Sept 2026.
+tasks.named('check') { dependsOn 'observationTest', 'pairingTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest' }

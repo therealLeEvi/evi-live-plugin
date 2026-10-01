@@ -270,6 +270,24 @@ public final class EviLivePanelTest {
       if(back.isVisible())throw new AssertionError("It must disappear again once nothing is set aside");
     }
 
+    // The companion-app-out-of-date line, under the connection status rather than in the advice list
+    // (novi, 1 Oct 2026). Hidden until there is something to say, so it costs a current user nothing.
+    {
+      EviLivePanel sp=new EviLivePanel(k->{},()->{},()->{},()->{},()->{},()->{},()->{});
+      java.lang.reflect.Field f=EviLivePanel.class.getDeclaredField("staleBridge");
+      f.setAccessible(true);
+      javax.swing.JTextArea area=(javax.swing.JTextArea)f.get(sp);
+      SwingUtilities.invokeAndWait(()->{});
+      if(area.isVisible())throw new AssertionError("Nothing to say: the line must be hidden, not blank");
+      sp.staleBridge("Your EVI Live companion app is older than this plugin.");
+      SwingUtilities.invokeAndWait(()->{});
+      if(!area.isVisible()||!area.getText().contains("older than this plugin"))
+        throw new AssertionError("An out-of-date bridge must show the line: "+area.getText());
+      sp.staleBridge(null);
+      SwingUtilities.invokeAndWait(()->{});
+      if(area.isVisible())throw new AssertionError("Once the bridge is current the line must disappear entirely");
+    }
+
     System.out.println("PASS: the session set-aside count and its undo button; the profit line (the figure in its own label, coloured green up and red down, trades, what it leaves out, a reset count, an unreadable answer, and reset feedback), the five-icon action row (each caption, its callback, and the row replacing the old button stack), the colour-scheme switch repainting in place (including rows rebuilt afterwards), sidebar pairing callback, masked key input and clearing after save, the skip-suggestion and block button callbacks, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten), the suggestion card (item, worth, verdict label and check lines; a failed check marked as well as coloured; and the paragraph coming back when the bridge sends no verdict), and the pairing section collapsing once paired and returning when a key is cleared, with the status dot tracking the bridge");
   }
   /** The profit line's current text: the one text area that starts with a figure or its own status. */

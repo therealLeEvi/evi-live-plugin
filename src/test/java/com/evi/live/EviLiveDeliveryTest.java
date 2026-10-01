@@ -735,11 +735,18 @@ public final class EviLiveDeliveryTest {
     check(driftHint.invoke(null,buyOffer,priceFor11)==null,"A buy offer only 3% below the market's buyPrice must not be flagged (within OFFER_DRIFT_THRESHOLD)");
     EviLivePlugin.ActiveOffer buyOfferFar=new EviLivePlugin.ActiveOffer(11,80,true,"Buying item",300);
     String buyHint=(String)driftHint.invoke(null,buyOfferFar,priceFor11);
-    check(buyHint!=null && buyHint.contains("Buying item") && buyHint.contains("cancelling"),"A buy offer priced well below the market must produce a cancel/relist hint naming the item");
+    // Shortened 1 Oct 2026: the sentence no longer repeats the item name or the two prices, because
+    // the card above it already shows both (name as its title, prices in its figures row). What it
+    // must still carry is the SIZE of the drift and what to do -- those are not on the card.
+    check(buyHint!=null && buyHint.contains("20%") && buyHint.contains("under the market"),"A buy offer well below the market must say how far under it is: "+buyHint);
+    check(buyHint.toLowerCase().contains("relist"),"...and what to do about it: "+buyHint);
+    check(!buyHint.contains("Buying item"),"The card already shows the item name; repeating it is what made these unreadable");
     EviLivePlugin.ActiveOffer sellOffer=new EviLivePlugin.ActiveOffer(12,250,false,"Selling item",50);
     Suggestion priceFor12=new Suggestion();priceFor12.itemId=12;priceFor12.buyPrice=190;priceFor12.sellPrice=200;
     String sellHint=(String)driftHint.invoke(null,sellOffer,priceFor12);
-    check(sellHint!=null && sellHint.contains("Selling item") && sellHint.contains("selling at the current price"),"A sell offer priced well above the market must produce a hint mentioning selling now as an alternative");
+    check(sellHint!=null && sellHint.contains("over the market"),"A sell offer above the market must say so: "+sellHint);
+    check(sellHint.contains("take the current price"),"...and must still offer selling now as the alternative, which is the useful half: "+sellHint);
+    check(!sellHint.contains("Selling item"),"The card already shows the item name");
     check(driftHint.invoke(null,buyOffer,null)==null,"No live price for this item at all must never be flagged");
     EviLivePlugin.ActiveOffer zeroPriceOffer=new EviLivePlugin.ActiveOffer(11,0,true,"Buying item",300);
     check(driftHint.invoke(null,zeroPriceOffer,priceFor11)==null,"An offer with no set price yet must never be flagged");
@@ -754,13 +761,26 @@ public final class EviLiveDeliveryTest {
     check(fillHintMethod.invoke(null,buyOffer,null)==null,"No estimate at all (no target duration set, or no volume data) must never be flagged");
     EviLivePlugin.OfferFillEstimate slowMinutes=new EviLivePlugin.OfferFillEstimate();slowMinutes.itemId=11;slowMinutes.likelyToFillInTime=false;slowMinutes.estimatedFillMinutes=6000;
     String slowHint=(String)fillHintMethod.invoke(null,buyOffer,slowMinutes);
-    check(slowHint!=null && slowHint.contains("Buying item") && slowHint.contains("buy offer") && slowHint.contains("300 remaining") && slowHint.contains("100 hours") && slowHint.contains("rough volume-based estimate") && slowHint.contains("not a guarantee"),"A slow estimate must name the item, direction and remaining quantity, phrase the minutes as hours, and stay explicitly hedged -- never a fill promise: "+slowHint);
+    // Shortened 1 Oct 2026. The facts moved to the card's figures row, which this used to leave
+    // EMPTY while the drift card beside it used its own. What the SENTENCE must still carry is the
+    // hedge, because this is a fill estimate and the standing rule is that anything predicting a
+    // fill says plainly it is not promising one.
+    check(slowHint!=null && slowHint.contains("rough volume estimate") && slowHint.contains("not a guarantee"),"A fill estimate must stay explicitly hedged -- never a fill promise: "+slowHint);
+    check(slowHint.length()<140,"...and must stay short enough to read at a glance: "+slowHint.length()+" chars");
+    check(!slowHint.contains("Buying item"),"The card already shows the item name");
+    Method fillFiguresMethod=EviLivePlugin.class.getDeclaredMethod("offerFillFigures",EviLivePlugin.ActiveOffer.class,EviLivePlugin.OfferFillEstimate.class);
+    fillFiguresMethod.setAccessible(true);
+    String slowFigures=(String)fillFiguresMethod.invoke(null,buyOffer,slowMinutes);
+    check(slowFigures!=null && slowFigures.contains("300 remaining") && slowFigures.contains("100 hours"),"The figures row carries the quantity and the pace, phrased as hours: "+slowFigures);
+    check(fillFiguresMethod.invoke(null,buyOffer,onPace)==null,"No figures for an offer that is not flagged at all");
     EviLivePlugin.OfferFillEstimate noVolumeAtAll=new EviLivePlugin.OfferFillEstimate();noVolumeAtAll.itemId=12;noVolumeAtAll.likelyToFillInTime=false;noVolumeAtAll.estimatedFillMinutes=-1;
     String noVolumeHint=(String)fillHintMethod.invoke(null,sellOffer,noVolumeAtAll);
-    check(noVolumeHint!=null && noVolumeHint.contains("sell offer") && noVolumeHint.contains("almost no recent trading volume"),"The -1 sentinel (essentially no recent volume) must never be printed as a literal number");
+    String noVolumeFigures=(String)fillFiguresMethod.invoke(null,sellOffer,noVolumeAtAll);
+    check(noVolumeFigures!=null && noVolumeFigures.contains("almost no recent trading") && !noVolumeFigures.contains("-1"),"The -1 sentinel (essentially no recent volume) must never be printed as a literal number: "+noVolumeFigures);
     EviLivePlugin.OfferFillEstimate fastMinutes=new EviLivePlugin.OfferFillEstimate();fastMinutes.itemId=11;fastMinutes.likelyToFillInTime=false;fastMinutes.estimatedFillMinutes=45;
     String fastHint=(String)fillHintMethod.invoke(null,buyOffer,fastMinutes);
-    check(fastHint!=null && fastHint.contains("45 minutes"),"An estimate under an hour must be phrased in minutes, not a fractional hour");
+    String fastFigures=(String)fillFiguresMethod.invoke(null,buyOffer,fastMinutes);
+    check(fastFigures!=null && fastFigures.contains("45 minutes"),"An estimate under an hour must be phrased in minutes, not a fractional hour: "+fastFigures);
 
     // skipSuggestion(): the sidebar's "Skip this suggestion" button callback.
     EviLivePlugin skipPlugin=new EviLivePlugin();
@@ -1106,6 +1126,25 @@ public final class EviLiveDeliveryTest {
       check(!other.contains("Wrong key"),"Only a 401 may be reported as a wrong key, not status "+st);
     }
 
-    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the accept-suggestion callback (the pick left on screen and not set aside, the toggle, the no-op without a bridge-issued id, and the AcceptRequest JSON shape), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, the cash stack counting coins AND platinum tokens at 1,000 gp each without overflowing (a full stack of both is ~2.149 trillion) and reporting -1 rather than 0 when the inventory cannot be read, the 401-versus-unreachable distinction (a rejected key names which of the two printed keys to use and is never called unreachable; every other status keeps the unreachable wording), and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus");
+    // -- The companion-app-out-of-date notice. Nothing has ever told a bridge user that a newer
+    // bridge exists: the plugin updates itself through the Hub, the bridge is a zip downloaded once.
+    // The OLD bridge cannot announce its own age, so the plugin has to.
+    check(EviLivePlugin.bridgeOutOfDate(1,true),"A bridge behind this plugin must be reported");
+    check(!EviLivePlugin.bridgeOutOfDate(EviLivePlugin.EXPECTED_BRIDGE_API,true),"A current bridge must say nothing");
+    check(!EviLivePlugin.bridgeOutOfDate(EviLivePlugin.EXPECTED_BRIDGE_API+1,true),"A NEWER bridge is not out of date -- the player may simply have updated it first");
+    // Unknown must stay silent. A bridge that is merely unreachable, or a key being rejected, must
+    // not ALSO be accused of being out of date: EVI has already shipped one panel showing two
+    // contradictory messages at once, and this is exactly how that happens again.
+    check(!EviLivePlugin.bridgeOutOfDate(-1,true),"Unknown version says nothing");
+    check(!EviLivePlugin.bridgeOutOfDate(-1,false),"Unknown version with a refused key says nothing either");
+    // A bridge too old to have /api/version answers 401 there, which the transport maps to 0 -- but
+    // so does a wrong key. Only claim an old bridge when ordinary calls are demonstrably working.
+    check(EviLivePlugin.bridgeOutOfDate(0,true),"A pre-version bridge is out of date when the key IS working");
+    check(!EviLivePlugin.bridgeOutOfDate(0,false),"...but a refused key must be reported as a refused key, not as an old bridge");
+    String stale=EviLivePlugin.bridgeOutOfDateMessage();
+    check(stale.contains("Nothing is broken"),"An older bridge WORKS; the wording must not imply a fault: "+stale);
+    check(stale.toLowerCase().contains("data folder"),"It must say to keep the data folder, or someone loses their history: "+stale);
+
+    System.out.println("PASS: authentication failure, disconnect, exact retry, stale sender, disabled delivery, pairing replacement, overflow rebaseline, the suggestion-settings query builder (including target trade duration), the cash-stack query building, the open-offer-item query building, the held-for-resale query building (including the held item's own buy offerId), the active-slot/skip exclude query building, the skip-suggestion and block callbacks (the block request naming the item), the accept-suggestion callback (the pick left on screen and not set aside, the toggle, the no-op without a bridge-issued id, and the AcceptRequest JSON shape), the persisted-suggestion inventory verification, the poll-time auto-skip of a stale persisted suggestion, the personal-use button callback (no-op on a buy suggestion; an item-level exclusion for owned gear the idle-inventory tier offered, with no buy behind it; the session-local exclusion on an actual held item), the PersonalUseRequest JSON shape, the inventory-quantity/idle-inventory-suggestion query building, the sell-quantity correction against actual current inventory (including its end-to-end effect through pollSuggestion), the in-progress-offer slots= query building (item:remainingQty pairs, excluding terminal-but-uncollected offers), the activeOffers snapshot itself (price/direction/name/remaining quantity, terminal offers excluded), the offer-drift cancel/relist hint (buy offers below market, sell offers above market, within-threshold and missing-price cases all left unflagged), the offer fill-time hint (on-pace and no-estimate cases left unflagged, minutes phrased as hours past 60, the -1 no-volume sentinel never printed as a number, and the wording kept to a hedged volume observation rather than a fill guarantee), Held.price/holdBuyPrice (the real spent/filled average paid, correctly rounded, sent only when known, and never fabricated when no spent data was observed), the MinProfitTier preset tiers (AUTO left off the query exactly like the old free-form field's 0, each tier's own gp figure), and marginSafetyCushion (off by default under its new keyName, combining correctly with a profit tier when opted in, and explicit-off matching pre-existing behaviour), the sidebar's full GE offer list snapshot (uncollected offers included, cleared on reset), the no-suggestion message wording, the cash stack counting coins AND platinum tokens at 1,000 gp each without overflowing (a full stack of both is ~2.149 trillion) and reporting -1 rather than 0 when the inventory cannot be read, the 401-versus-unreachable distinction (a rejected key names which of the two printed keys to use and is never called unreachable; every other status keeps the unreachable wording), and the members= world-type parameter, and the focus= parameter from the plugin's own Suggestion focus, and the companion-app-out-of-date notice (behind, current, newer, unknown, and the 401 ambiguity between a pre-version bridge and a refused key)");
   }
 }

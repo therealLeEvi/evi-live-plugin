@@ -3,10 +3,6 @@ package com.evi.live;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
-import net.runelite.api.VarClientInt;
-import net.runelite.api.VarPlayer;
-import net.runelite.api.Varbits;
-import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 
 /**
@@ -25,11 +21,11 @@ class GEOffer {
   @Inject private Client client;
 
   boolean isSlotOpen() { return client.getVarbitValue(CURRENTLY_OPEN_GE_SLOT_VARBIT_ID) - 1 != -1; }
-  int currentItemId() { return client.getVarpValue(VarPlayer.CURRENT_GE_ITEM); }
-  boolean isBuying() { return client.getVarbitValue(Varbits.GE_OFFER_CREATION_TYPE) == 0; }
-  boolean isSelling() { return client.getVarbitValue(Varbits.GE_OFFER_CREATION_TYPE) == 1; }
+  int currentItemId() { return client.getVarpValue(GeIds.CURRENT_GE_ITEM); }
+  boolean isBuying() { return client.getVarbitValue(GeIds.GE_OFFER_CREATION_TYPE) == 0; }
+  boolean isSelling() { return client.getVarbitValue(GeIds.GE_OFFER_CREATION_TYPE) == 1; }
 
-  private Widget chatboxTitle() { return client.getWidget(ComponentID.CHATBOX_TITLE); }
+  private Widget chatboxTitle() { return client.getWidget(GeIds.CHATBOX_TITLE); }
 
   /** Does the open offer panel identify itself as a buy or a sell offer?
    *
@@ -44,7 +40,7 @@ class GEOffer {
    *  Returns null only when no child says either. Callers must treat that as "cannot tell from the
    *  widget", NOT as "not an offer screen" -- see isSettingPrice, which falls back to the varbit. */
   private Widget offerTypeWidget() {
-    Widget container = client.getWidget(ComponentID.GRAND_EXCHANGE_OFFER_CONTAINER);
+    Widget container = client.getWidget(GeIds.GRAND_EXCHANGE_OFFER_CONTAINER);
     if (container == null) return null;
     Widget found = findOfferType(container.getChildren());
     return found != null ? found : findOfferType(container.getDynamicChildren());
@@ -78,7 +74,7 @@ class GEOffer {
    *
    *  The offer-type widget is a CROSS-CHECK, never the thing that decides. When it cannot be found
    *  the varbit decides instead, because that is what openFieldFor goes on to read anyway
-   *  (isBuying/isSelling, Varbits.GE_OFFER_CREATION_TYPE) -- so refusing here on a missing widget
+   *  (isBuying/isSelling, GeIds.GE_OFFER_CREATION_TYPE) -- so refusing here on a missing widget
    *  withhold a price EVI had already worked out, on the strength of a lookup that adds nothing the
    *  varbit does not already say. A widget that IS found and says something else still refuses:
    *  that is a positive signal we are looking at the wrong screen, which absence is not. */
@@ -96,7 +92,7 @@ class GEOffer {
    * actually open. Independent of whether any suggestion currently matches.
    *
    * <p>This asks the chatbox what prompt it IS -- by its own title text -- rather than reading
-   * VarClientInt.INPUT_TYPE and comparing it to a magic number. It used to require
+   * GeIds.CHATBOX_INPUT_TYPE and comparing it to a magic number. It used to require
    * {@code INPUT_TYPE == 7}, copied from a currently published Hub plugin, and Jagex's
    * "Beyond Max Cash" update on 30 September 2026 changed the PRICE prompt's input type to 30
    * while leaving the quantity prompt's alone. The gate went permanently false for prices, so the
@@ -138,14 +134,14 @@ class GEOffer {
     return (isSettingQuantity() || isSettingPrice())
       && anyChatboxInputActive()
       && currentItemId() > 0
-      && client.getWidget(ComponentID.GRAND_EXCHANGE_OFFER_CONTAINER) != null
+      && client.getWidget(GeIds.GRAND_EXCHANGE_OFFER_CONTAINER) != null
       && isSlotOpen();
   }
 
   /** Is the chatbox accepting input at all? Zero means none is open; every other value is some
    *  kind of input, and WHICH kind is deliberately not asked -- see isPromptOpen. */
   private boolean anyChatboxInputActive() {
-    return client.getVarcIntValue(VarClientInt.INPUT_TYPE) != 0;
+    return client.getVarcIntValue(GeIds.CHATBOX_INPUT_TYPE) != 0;
   }
 
   /**

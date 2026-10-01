@@ -137,9 +137,24 @@ public class EviLivePlugin extends Plugin {
   // Set when the bridge ANSWERS with a 401. A saved key that the bridge refuses is not a pairing,
   // and the panel must stop pretending it is -- see refreshPairingVisibility.
   private volatile boolean keyRejected;
+  // What the companion app reports it speaks (GET /api/version), or -1 while unknown. Compared
+  // against EXPECTED_BRIDGE_API below.
+  private volatile int bridgeApi=-1;
   private volatile boolean inInstance;
   // Acceptances the player has pressed but the bridge has not confirmed yet. See acceptSuggestion.
   private final java.util.Map<String,Boolean> pendingAccept=new java.util.concurrent.ConcurrentHashMap<>();
+  // The bridge API this build of the plugin was written against. Raise it in step with BRIDGE_API in
+  // bridge/server.mjs whenever a bridge release adds something a player would want.
+  //
+  // WHY THIS EXISTS. The plugin updates itself through the Plugin Hub; the companion app is a zip
+  // somebody downloaded once, and nothing has ever told them a newer one exists. On 1 Oct 2026 three
+  // people were running a bridge from the previous day and would have kept running it indefinitely,
+  // missing every fix since. The old bridge cannot announce its own age -- it does not know a newer
+  // one was released -- so the half that updates automatically has to be the one that says so.
+  //
+  // Deliberately NOT a failure. An older bridge works; it simply does less. The message says the app
+  // is behind, never that anything is broken, and nothing is withheld because of it.
+  static final int EXPECTED_BRIDGE_API=2;
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
@@ -364,6 +379,30 @@ public class EviLivePlugin extends Plugin {
    *  the two keys to use -- the app prints "Scanner key" and "RuneLite plugin key" on adjacent
    *  lines, and taking the wrong one is the easy mistake. Any other status, including none at all,
    *  keeps the original wording, because then it really may be unreachable. */
+  /** Should the player be told their companion app is behind this plugin?
+   *
+   *  `reported` is what GET /api/version said: -1 when it could not be read, 0 for a bridge too old
+   *  to have that route at all (it answers 401, which the transport maps to 0).
+   *
+   *  Unknown (-1) says NOTHING. A bridge that is merely unreachable, or a key being rejected, must
+   *  not also be accused of being out of date -- EVI has already shipped one panel showing two
+   *  contradictory messages at once, and this is exactly how that happens again.
+   *
+   *  `keyAccepted` guards the 0 case for the same reason: a pre-version bridge and a wrong key both
+   *  produce a 401, so an old bridge is only claimed when ordinary calls are demonstrably working. */
+  static boolean bridgeOutOfDate(int reported, boolean keyAccepted) {
+    if (reported < 0) return false;
+    if (reported == 0) return keyAccepted;
+    return reported < EXPECTED_BRIDGE_API;
+  }
+
+  /** One short sentence, and never alarming: an older companion app works, it just does less. */
+  static String bridgeOutOfDateMessage() {
+    return "Your EVI Live companion app is older than this plugin, so some newer suggestions and "
+      + "sidebar notes are missing. Nothing is broken -- download the latest one and replace your "
+      + "folder, keeping your data folder.";
+  }
+
   static String bridgeFailureMessage(int status) {
     return status==401
       ? "Wrong key. EVI reached the companion app and it refused this key -- paste the one it prints as \"RuneLite plugin key\", not the Scanner key."
@@ -421,7 +460,7 @@ public class EviLivePlugin extends Plugin {
   // update, so every quantity in this plugin is still safely an int.
   private void refreshCashStack() {
     try {
-      net.runelite.api.ItemContainer inv=client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+      net.runelite.api.ItemContainer inv=client.getItemContainer(GeIds.INVENTORY);
       if(inv==null){cashStack=-1;return;}
       cashStack=(long)inv.count(995)+(long)inv.count(13204)*1000L;
     } catch(Exception ex){cashStack=-1;}
@@ -434,7 +473,7 @@ public class EviLivePlugin extends Plugin {
   // which is why this -- like refreshCashStack -- is safe to call from there directly).
   private void refreshInventoryItemIds() {
     try {
-      net.runelite.api.ItemContainer inv=client.getItemContainer(net.runelite.api.InventoryID.INVENTORY);
+      net.runelite.api.ItemContainer inv=client.getItemContainer(GeIds.INVENTORY);
       if(inv==null)return; // leave the previous snapshot (and inventorySnapshotEstablished) in place
       Set<Integer> ids=new java.util.HashSet<>();
       Map<Integer,Integer> quantities=new java.util.HashMap<>();
@@ -699,10 +738,22 @@ public class EviLivePlugin extends Plugin {
   // stays cheap. Only ever updates the in-memory cache the hotkey handler reads — never writes
   // anything back to the game itself; filling still separately requires the real GE prompt to be
   // open for the matching item (see GEOffer.openFieldFor), so this change does not loosen that gate.
+  /** Reads the companion app's API once, on the sender thread, and leaves it alone afterwards.
+   *
+   *  Asked only while still unknown: this is a constant for the life of a bridge process, so polling
+   *  it every two seconds alongside the suggestion would be pure noise. It retries whenever it is
+   *  still -1, which covers the bridge being started after RuneLite. */
+  private void refreshBridgeApi(String key) {
+    if(bridgeApi>=0 || key==null)return;
+    try { bridgeApi=transport.version(key); } catch(Exception ignored){ /* stays -1: says nothing */ }
+  }
+
   private void pollSuggestion(long generation) {
     if(!running || generation!=lifecycle)return;
     String key=pluginKey;
     if(key==null)return;
+    // Before the suggestion, and only while still unknown: see refreshBridgeApi.
+    refreshBridgeApi(key);
     try {
       String json=transport.get(key,suggestionQuery());
       if(!running || generation!=lifecycle)return;
@@ -1235,13 +1286,16 @@ public class EviLivePlugin extends Plugin {
       if(ref<=0)return null;
       double drift=(ref-o.price)/(double)ref; // positive: offer priced below today's market
       if(drift>OFFER_DRIFT_THRESHOLD)
-        return String.format("Your buy offer for %s is priced at %,d gp, but today's market is around %,d gp (%.0f%% below) -- it may sit unfilled. Consider cancelling and relisting closer to the market price.",o.name,o.price,ref,drift*100);
+        // Shortened 1 Oct 2026. The card above already carries the item name and both prices in its
+        // figures row ("4,100,000 yours . 4,271,186 market"), so the sentence only has to say what
+        // the numbers MEAN and what to do.
+        return String.format("%.0f%% under the market, so it may sit unfilled. Relisting nearer the market price is the usual fix.",drift*100);
     } else {
       long ref=price.sellPrice;
       if(ref<=0)return null;
       double drift=(o.price-ref)/(double)ref; // positive: offer priced above today's market
       if(drift>OFFER_DRIFT_THRESHOLD)
-        return String.format("Your sell offer for %s is priced at %,d gp, but today's market is around %,d gp (%.0f%% above) -- it may sit unfilled. Consider cancelling and relisting closer to the market price, or selling at the current price.",o.name,o.price,ref,drift*100);
+        return String.format("%.0f%% over the market, so it may sit unfilled. Relist nearer the market, or take the current price.",drift*100);
     }
     return null;
   }
@@ -1261,12 +1315,25 @@ public class EviLivePlugin extends Plugin {
   // Pure and independently testable, exactly like offerDriftHint. Returns null when there's nothing
   // to flag: no estimate for this item (fill==null -- no target duration set, or no recent volume
   // data at all for it), or the estimate says it's on pace.
+  // Shortened 1 Oct 2026 at novi's request: "some of the messages are quite long". The old sentence
+  // ran to about 310 characters and three of its clauses were already on screen -- it named the item
+  // the card shows directly above it, restated the label ("running longer than your target trade
+  // duration" IS "May not fill in time"), and hedged twice. It also left the card's figures row EMPTY
+  // while the drift card beside it used that row for its numbers.
+  //
+  // The HEDGE stays. This is a fill estimate, and the standing rule is that anything predicting a
+  // fill says plainly that it is not promising one.
   private static String offerFillHint(ActiveOffer o, OfferFillEstimate fill) {
     if(fill==null || fill.likelyToFillInTime)return null;
+    return "A rough volume estimate, not a guarantee. Reprice, resize, or cancel if you need it sooner.";
+  }
+  /** The numbers for the card's own figures row: what the sentence above used to spell out. */
+  private static String offerFillFigures(ActiveOffer o, OfferFillEstimate fill) {
+    if(fill==null || fill.likelyToFillInTime)return null;
     String pace=fill.estimatedFillMinutes<0
-      ?"there's been almost no recent trading volume for it at all"
-      :"recent volume suggests its remaining quantity typically takes roughly "+formatMinutes(fill.estimatedFillMinutes)+" to trade";
-    return String.format("Your %s offer for %s (%,d remaining) is running longer than your target trade duration -- %s. This is a rough volume-based estimate, not a guarantee either way -- consider adjusting the price or quantity, or cancelling if you need it sooner.",o.buying?"buy":"sell",o.name,o.remaining,pace);
+      ?"almost no recent trading"
+      :"~"+formatMinutes(fill.estimatedFillMinutes)+" at recent volume";
+    return String.format("%,d remaining · %s",o.remaining,pace);
   }
   // Matches each still-in-progress offer (activeOffers, itself already excluding terminal ones --
   // see refreshActiveSlotItemIds) against the live price and fill estimate the bridge just returned
@@ -1279,6 +1346,11 @@ public class EviLivePlugin extends Plugin {
     if(panel==null)return;
     if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
     java.util.List<AdviceCard> cards=new java.util.ArrayList<>();
+    // The out-of-date notice is NOT a card. It was one until novi asked for it under the connection
+    // line on 1 Oct 2026, and they were right: an advice card is about an offer, and this is about
+    // the connection the whole panel depends on. Putting it in the list also meant it competed with
+    // actual trades for the top slot every poll.
+    panel.staleBridge(bridgeOutOfDate(bridgeApi,!keyRejected)?bridgeOutOfDateMessage():null);
     // Shown first: an offer that has been sitting is the thing most worth acting on.
     if(relistAdvice!=null)for(RelistAdvice advice:relistAdvice) {
       if(advice==null || advice.message==null || advice.message.isEmpty())continue;
@@ -1298,7 +1370,8 @@ public class EviLivePlugin extends Plugin {
         o.buying?"Priced under market":"Priced over market",o.name,
         price==null?null:String.format("%,d yours \u00b7 %,d market",o.price,o.buying?price.buyPrice:price.sellPrice),
         priceHint));
-      if(fillHint!=null)cards.add(new AdviceCard("caution","May not fill in time",o.name,null,fillHint));
+      if(fillHint!=null)cards.add(new AdviceCard("caution","May not fill in time",o.name,
+        offerFillFigures(o,fill),fillHint));
     }
     panel.advice(cards);
   }

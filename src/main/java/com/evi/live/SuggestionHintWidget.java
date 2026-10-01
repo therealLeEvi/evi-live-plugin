@@ -4,7 +4,6 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
 import net.runelite.api.FontID;
-import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetPositionMode;
 import net.runelite.api.widgets.WidgetSizeMode;
@@ -50,7 +49,7 @@ class SuggestionHintWidget {
       clear();
       return;
     }
-    Widget parent = client.getWidget(ComponentID.CHATBOX_CONTAINER);
+    Widget parent = client.getWidget(GeIds.CHATBOX_CONTAINER);
     if (parent == null) {
       clear();
       return;
@@ -96,7 +95,7 @@ class SuggestionHintWidget {
   // same reason as the reference plugin: our hint line sits where the question text would
   // otherwise overlap it. Only called from create(), never from update(), so it never accumulates.
   private void nudgeTitleDown() {
-    Widget title = client.getWidget(ComponentID.CHATBOX_TITLE);
+    Widget title = client.getWidget(GeIds.CHATBOX_TITLE);
     if (title == null) return;
     title.setOriginalY(title.getOriginalY() + TITLE_NUDGE);
     title.revalidate();

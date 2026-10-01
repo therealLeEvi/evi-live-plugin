@@ -3,8 +3,6 @@ package com.evi.live;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
-import net.runelite.api.VarClientStr;
-import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetType;
@@ -42,7 +40,7 @@ import net.runelite.api.widgets.WidgetType;
  * own shipped, approved code uses them, which is what makes this a faithful replication of a
  * precedented, accepted technique rather than a guess at undocumented behaviour.
  *
- * Three child widgets are created under ComponentID.CHATBOX_GE_SEARCH_RESULTS, mirroring Copilot's
+ * Three child widgets are created under GeIds.CHATBOX_GE_SEARCH_RESULTS, mirroring Copilot's
  * own composition (their version splits the text into two widgets and reuses the game's own
  * "previous search" convenience row when available; this version always creates its own three
  * fresh children -- a clickable backdrop rectangle, one combined "EVI item: <name>" text, and the
@@ -109,14 +107,14 @@ class SuggestionItemSelectWidget {
       clear();
       return;
     }
-    Widget results = client.getWidget(ComponentID.CHATBOX_GE_SEARCH_RESULTS);
+    Widget results = client.getWidget(GeIds.CHATBOX_GE_SEARCH_RESULTS);
     if (results == null) {
       clear();
       return;
     }
     // Typing: the live results use this space. Hide rather than recreate; the game rebuilds the
     // list as the player types, and the attachment check below restores the row afterwards.
-    String typed = client.getVarcStrValue(VarClientStr.INPUT_TEXT);
+    String typed = client.getVarcStrValue(GeIds.CHATBOX_INPUT_TEXT);
     if (typed != null && !typed.isEmpty()) {
       if (attached(results)) setHidden(true);
       return;

@@ -29,6 +29,19 @@ interface LocalTransport {
   default int lastGetStatus() { return 0; }
 
   /**
+   * Asks the bridge which API it speaks: GET /api/version, which answers {"api":N,"packet":N}.
+   * Returns N, or -1 when it could not be read at all.
+   *
+   * <p>A bridge from BEFORE that route existed answers 401 here, because the request falls through
+   * to the scanner gate -- so a 401 is not necessarily a bad key, and the caller distinguishes the
+   * two by whether ordinary suggestion calls are working (see EviLivePlugin.refreshBridgeApi).
+   *
+   * <p>Default returns -1 so the anonymous test doubles keep compiling, the same reason
+   * lastGetStatus above is a default. Only Http actually talks to the bridge.
+   */
+  default int version(String key) throws IOException { return -1; }
+
+  /**
    * Flags (or unflags) a specific, already-observed buy offer as personal use with the bridge --
    * see Store.markPersonalUse in bridge/store.mjs and EviLivePlugin.flagPersonalUse. json is the
    * full request body (e.g. {"buyId":"...","personal":true}), built by the caller the same way
@@ -122,6 +135,31 @@ interface LocalTransport {
     }
     private volatile int lastGet;
     @Override public int lastGetStatus() { return lastGet; }
+    @Override
+    public int version(String key) throws IOException {
+      Request request = new Request.Builder()
+        .url("http://127.0.0.1:51743/api/version")
+        .header("Authorization", "Bearer " + key)
+        .cacheControl(CacheControl.FORCE_NETWORK)
+        .get()
+        .build();
+      try(Response response = client.newCall(request).execute()) {
+        // 401 from a bridge too old to have this route at all. Reported as 0 rather than -1, which
+        // means "could not tell": an old bridge IS an answer, and the whole point of this call.
+        if (response.code() == 401) return 0;
+        if (response.code() != 200) return -1;
+        ResponseBody body = response.body();
+        if (body == null) return -1;
+        // Deliberately not parsed with Gson: this is one integer from a local process, and a
+        // malformed answer must leave the player alone rather than throw inside the poll thread.
+        java.util.regex.Matcher m = java.util.regex.Pattern
+          .compile("\"api\"\\s*:\\s*(\\d+)").matcher(body.string());
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
+      } catch (RuntimeException ex) {
+        return -1;
+      }
+    }
+
     public String get(String key, String query) throws IOException {
       String url = "http://127.0.0.1:51743/api/suggestion" + (query == null || query.isEmpty() ? "" : "?" + query);
       Request request = new Request.Builder()

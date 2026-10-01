@@ -4,8 +4,6 @@ import java.awt.event.KeyEvent;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
-import net.runelite.api.VarClientStr;
-import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.input.KeyListener;
@@ -71,9 +69,9 @@ class SuggestionKeybindHandler {
   }
 
   private void fillValue(long value) {
-    Widget input = client.getWidget(ComponentID.CHATBOX_FULL_INPUT);
+    Widget input = client.getWidget(GeIds.CHATBOX_FULL_INPUT);
     if (input == null) return;
     input.setText(value + "*");
-    client.setVarcStrValue(VarClientStr.INPUT_TEXT, String.valueOf(value));
+    client.setVarcStrValue(GeIds.CHATBOX_INPUT_TEXT, String.valueOf(value));
   }
 }

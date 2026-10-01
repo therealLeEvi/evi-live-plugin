@@ -6,7 +6,6 @@ import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
@@ -73,7 +72,7 @@ final class SuggestionSearchHighlightOverlay extends Overlay {
   // chatbox prompt SuggestionHintWidget/GEOffer work with, only populated/visible while the
   // search box is actually open and showing matches.
   private Widget findSuggestionRow(int itemId) {
-    Widget results = client.getWidget(ComponentID.CHATBOX_GE_SEARCH_RESULTS);
+    Widget results = client.getWidget(GeIds.CHATBOX_GE_SEARCH_RESULTS);
     if (results == null || results.isHidden()) return null;
     Widget[] children = results.getDynamicChildren();
     if (children == null) return null;
