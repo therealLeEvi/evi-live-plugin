@@ -54,7 +54,7 @@ final class EviLivePanel extends PluginPanel {
    *
    *  It exists because the list was invisible and one-way. Every Skip, Block, "Mark as personal use"
    *  and "I don't have this anymore" adds to it, as does a stale holding EVI re-checks and drops, and
-   *  it only ever cleared on a profile change or a client restart. On 28 Sept 2026 novi worked down
+   *  it only ever cleared on a profile change or a client restart. On 28 Sept 2026 a player worked down
    *  from a 441,621 gp 3rd Age robe to a Blighted teleport spell sack worth a few hundred, and the
    *  cause was not the ranking or any floor -- it was that everything better had quietly been set
    *  aside earlier in the session, with nothing on screen saying so or offering it back. */
@@ -308,7 +308,7 @@ final class EviLivePanel extends PluginPanel {
     strip.add(status, BorderLayout.CENTER);
     content.add(strip);
 
-    // Directly under the connection line, at novi's request on 1 Oct 2026: it is a fact ABOUT the
+    // Directly under the connection line, by the maintainer's decision on 1 Oct 2026: it is a fact ABOUT the
     // connection, not advice about a trade, so it belongs beside the thing it describes rather than
     // at the top of the advice list competing with offers. Hidden until there is something to say.
     staleBridge.setVisible(false);
@@ -613,7 +613,7 @@ final class EviLivePanel extends PluginPanel {
   /** The suggestion as a card rather than a paragraph.
    *
    *  The sidebar used to state a number and bury whether EVI trusted it. On 28 September 2026 a player
-   *  bought 30 Contract of Glyphic Attenuation expecting the 2,977,560 gp the quoted spread implied; it
+   *  bought a batch of Contract of Glyphic Attenuation expecting roughly the 3m gp the quoted spread implied; it
    *  was worth about 350,000, and EVI knew -- it had demoted the pick and said so, in the middle of a
    *  paragraph. The figure was visible and the doubt was not.
    *

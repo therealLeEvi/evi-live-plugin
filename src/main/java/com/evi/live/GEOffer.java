@@ -118,7 +118,7 @@ class GEOffer {
    *       box is an active input ({@code inputType=14}) and the title is still stale, so
    *       isPromptOpen() went true during the search and SuggestionItemSelectWidget, which uses this
    *       as a NEGATIVE gate, stopped drawing the clickable suggestion row. That regression shipped
-   *       in the first 3.10.3 commit and was reported by novi within minutes.</li>
+   *       in the first 3.10.3 commit and was reported within minutes.</li>
    * </ul>
    *
    * <p>A quantity or price is always asked about a CHOSEN item; during the search none is chosen

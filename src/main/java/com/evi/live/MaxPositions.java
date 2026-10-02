@@ -3,7 +3,7 @@ package com.evi.live;
 /**
  * How many trades EVI may suggest at once. One by default, and that default is the point.
  *
- * novi's objection to the original "plan all eight Grand Exchange slots" idea still governs this
+ * The objection to the original "plan all eight Grand Exchange slots" idea still governs this
  * setting: allocating a cash stack across eight trades divides the cash by eight, and an
  * eighth-sized trade cannot make the profit they trade for. The only form they would accept was
  * "up to N, where the player chooses N, defaulting to 1".

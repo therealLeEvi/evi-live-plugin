@@ -98,7 +98,7 @@ public class EviLivePlugin extends Plugin {
   // It used to go into skippedItemIds, which is the list the player fills by pressing "Skip", and
   // that was wrong in a way that reached every user: a buy that has FILLED but not yet been
   // COLLECTED is not in the inventory, so a poll landing in that window excluded the item until
-  // RuneLite was restarted. Collecting it changed nothing, because EVI never asked again. novi hit
+  // RuneLite was restarted. Collecting it changed nothing, because EVI never asked again. A player hit
   // this twice -- a Dagon'hai hat on 29 Sept and 1 Gilded d'hide vambraces on 30 Sept, where the
   // bridge was answering "sell 1 Gilded d'hide vambraces ... +254,063" the whole time and the
   // plugin was dropping it on the floor. A transient condition must not cause a permanent exclusion,
@@ -158,7 +158,7 @@ public class EviLivePlugin extends Plugin {
   // buyers have stopped paying. Raised BEFORE 3.11.0 shipped rather than waiting for a later release
   // -- the plugin is the slow half, and a bridge-only fix can only be announced by a plugin, so the
   // chance to tell people was now or indefinitely later.
-  static final int EXPECTED_BRIDGE_API=3;
+  static final int EXPECTED_BRIDGE_API=4;
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
@@ -419,7 +419,7 @@ public class EviLivePlugin extends Plugin {
     } catch(Throwable ignored){ inInstance=false; }
   }
 
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;bridgeApi=-1;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -747,6 +747,20 @@ public class EviLivePlugin extends Plugin {
    *  Asked only while still unknown: this is a constant for the life of a bridge process, so polling
    *  it every two seconds alongside the suggestion would be pure noise. It retries whenever it is
    *  still -1, which covers the bridge being started after RuneLite. */
+  /** Called ONLY after a suggestion request has come back 200, which matters more than it looks.
+   *
+   *  `version()` reports 0 for a 401, meaning "a bridge too old to have this route" -- but a WRONG
+   *  KEY produces the same 401. This used to run before the first suggestion, when neither was known
+   *  yet, and the result was latched for the session. So: paste the Scanner key by mistake (the
+   *  documented easy error), get a 401, latch 0, then paste the right key -- `keyRejected` clears,
+   *  nothing re-reads, and the sidebar says "Companion app out of date" for ever against a perfectly
+   *  current bridge. Found on a second machine on 2 Oct 2026, on a freshly downloaded latest bundle.
+   *  `reset()` did not clear it either, so only restarting RuneLite cured it.
+   *
+   *  Moving the call behind a 200 makes a 0 trustworthy: the key demonstrably works, so a 401 HERE
+   *  really is a bridge without the route. The value is still read once and cached, because it
+   *  cannot change while a bridge process is running. `reset()` clears it so a newly pasted key,
+   *  which may point at an entirely different bridge, starts over. */
   private void refreshBridgeApi(String key) {
     if(bridgeApi>=0 || key==null)return;
     try { bridgeApi=transport.version(key); } catch(Exception ignored){ /* stays -1: says nothing */ }
@@ -756,8 +770,6 @@ public class EviLivePlugin extends Plugin {
     if(!running || generation!=lifecycle)return;
     String key=pluginKey;
     if(key==null)return;
-    // Before the suggestion, and only while still unknown: see refreshBridgeApi.
-    refreshBridgeApi(key);
     try {
       String json=transport.get(key,suggestionQuery());
       if(!running || generation!=lifecycle)return;
@@ -779,6 +791,9 @@ public class EviLivePlugin extends Plugin {
         return;
       }
       if(keyRejected){keyRejected=false;refreshPairingVisibility();}
+      // Only now, with a 200 in hand, is it safe to ask which API the bridge speaks -- see
+      // refreshBridgeApi for why asking any earlier produced a permanent false "out of date".
+      refreshBridgeApi(key);
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
       // Remember which positions the bridge believes are held, so the next poll can confirm them
@@ -1153,7 +1168,7 @@ public class EviLivePlugin extends Plugin {
     // worth selling that EVI never observed a buy for at all. TreeMap here purely for a
     // deterministic query string (same reasoning as the sorted `exclude` set above), not because
     // ordering matters to the bridge.
-    // Never inside an instance. Reported by novi on 28 Sept 2026 from inside a raid: EVI was
+    // Never inside an instance. Reported on 28 Sept 2026 from inside a raid: EVI was
     // offering to sell their supplies and raid gear, because to this tier an inventory is an
     // inventory. In a raid it is a loadout, not idle stock -- and the Grand Exchange cannot be
     // reached from in there anyway, so the suggestion could not be acted on even if it were right.
@@ -1291,7 +1306,7 @@ public class EviLivePlugin extends Plugin {
       double drift=(ref-o.price)/(double)ref; // positive: offer priced below today's market
       if(drift>OFFER_DRIFT_THRESHOLD)
         // Shortened 1 Oct 2026. The card above already carries the item name and both prices in its
-        // figures row ("4,100,000 yours . 4,271,186 market"), so the sentence only has to say what
+        // figures row ("4,000,000 yours . 4,200,000 market"), so the sentence only has to say what
         // the numbers MEAN and what to do.
         return String.format("%.0f%% under the market, so it may sit unfilled. Relisting nearer the market price is the usual fix.",drift*100);
     } else {
@@ -1319,7 +1334,7 @@ public class EviLivePlugin extends Plugin {
   // Pure and independently testable, exactly like offerDriftHint. Returns null when there's nothing
   // to flag: no estimate for this item (fill==null -- no target duration set, or no recent volume
   // data at all for it), or the estimate says it's on pace.
-  // Shortened 1 Oct 2026 at novi's request: "some of the messages are quite long". The old sentence
+  // Shortened 1 Oct 2026, on a report that the sidebar messages were too long. The old sentence
   // ran to about 310 characters and three of its clauses were already on screen -- it named the item
   // the card shows directly above it, restated the label ("running longer than your target trade
   // duration" IS "May not fill in time"), and hedged twice. It also left the card's figures row EMPTY
@@ -1350,7 +1365,7 @@ public class EviLivePlugin extends Plugin {
     if(panel==null)return;
     if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
     java.util.List<AdviceCard> cards=new java.util.ArrayList<>();
-    // The out-of-date notice is NOT a card. It was one until novi asked for it under the connection
+    // The out-of-date notice is NOT a card. It was one until the maintainer asked for it under the connection
     // line on 1 Oct 2026, and they were right: an advice card is about an offer, and this is about
     // the connection the whole panel depends on. Putting it in the list also meant it competed with
     // actual trades for the top slot every poll.

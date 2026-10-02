@@ -100,7 +100,7 @@ public final class EviLivePanelTest {
     javax.swing.JLabel figure=profitFigure(profitPanel);
     if(figure==null||!("+"+String.format("%,d",2020133)+" gp").equals(figure.getText()))
       throw new AssertionError("The realised figure belongs in its own label: "+(figure==null?"absent":figure.getText()));
-    // Green up. Asked for by novi on 29 Sept so the total reads at a glance.
+    // Green up. Asked for on 29 Sept so the total reads at a glance.
     if(!EviTheme.palette().good.equals(figure.getForeground()))
       throw new AssertionError("A profit must be coloured as one: "+figure.getForeground());
     if(!line.contains("everything EVI has matched"))throw new AssertionError("Without a reset it must say what it covers: "+line);
@@ -271,7 +271,7 @@ public final class EviLivePanelTest {
     }
 
     // The companion-app-out-of-date line, under the connection status rather than in the advice list
-    // (novi, 1 Oct 2026). Hidden until there is something to say, so it costs a current user nothing.
+    // (the maintainer, 1 Oct 2026). Hidden until there is something to say, so it costs a current user nothing.
     {
       EviLivePanel sp=new EviLivePanel(k->{},()->{},()->{},()->{},()->{},()->{},()->{});
       java.lang.reflect.Field f=EviLivePanel.class.getDeclaredField("staleBridge");

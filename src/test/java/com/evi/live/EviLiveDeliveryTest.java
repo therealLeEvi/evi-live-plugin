@@ -378,7 +378,7 @@ public final class EviLiveDeliveryTest {
     set(inventoryOn,"inventoryQuantities",snapshot);
     check("includeInventory=1&inventory=995:50000000,4151:1,30810:11".equals(suggestionQuery.invoke(inventoryOn)),"Inventory items must be sent sorted by item ID for a deterministic query string");
 
-    // ...but never from inside an instance. Reported by novi from inside a raid on 28 Sept 2026: EVI
+    // ...but never from inside an instance. Reported from inside a raid on 28 Sept 2026: EVI
     // was offering to sell their supplies and raid gear, because to this tier an inventory is just an
     // inventory. In a raid it is a loadout, and the Grand Exchange cannot be reached from in there
     // anyway, so the suggestion could not be acted on even if it had been right.
@@ -1014,7 +1014,7 @@ public final class EviLiveDeliveryTest {
     check(pollPluginUnverifiable.contains(5),"A persisted suggestion for an item not in the inventory must be held back for this poll");
     // NOT the manual-skip list, which is the whole point. It used to go there, and a buy that has
     // FILLED but not been COLLECTED is not in the inventory -- so a poll landing in that window
-    // excluded the item until RuneLite restarted, and collecting it changed nothing. novi hit this
+    // excluded the item until RuneLite restarted, and collecting it changed nothing. A player hit this
     // twice; the second time the bridge was answering "sell 1 Gilded d'hide vambraces ... +254,063"
     // while the plugin dropped it. A transient condition must not cause a permanent exclusion.
     check(!pollPluginSkips.contains(5),"...and must NOT enter the manual-skip list, which lasts the whole session");
@@ -1141,6 +1141,22 @@ public final class EviLiveDeliveryTest {
     // so does a wrong key. Only claim an old bridge when ordinary calls are demonstrably working.
     check(EviLivePlugin.bridgeOutOfDate(0,true),"A pre-version bridge is out of date when the key IS working");
     check(!EviLivePlugin.bridgeOutOfDate(0,false),"...but a refused key must be reported as a refused key, not as an old bridge");
+    // THE REGRESSION. version() reports 0 for a 401, and a WRONG KEY gives the same 401 -- so a 0
+    // taken before the key was known good is meaningless. Hit on a second machine on 2 Oct
+    // 2026: scanner key pasted by mistake, 0 latched, right key pasted, keyRejected cleared, and the
+    // sidebar then claimed a brand-new bundle was out of date for the rest of the session. reset()
+    // did not clear it either, so only restarting RuneLite cured it.
+    //
+    // The fix is ordering -- the version is only asked once a suggestion has returned 200 -- so what
+    // this asserts is that a 0 is NEVER treated as "old bridge" unless the key is demonstrably
+    // working, and that reset() starts the reading over because a new key may be a different bridge.
+    EviLivePlugin apiPlugin=new EviLivePlugin();
+    set(apiPlugin,"bridgeApi",0);
+    java.lang.reflect.Method apiReset=EviLivePlugin.class.getDeclaredMethod("reset");
+    apiReset.setAccessible(true);
+    apiReset.invoke(apiPlugin);
+    check(((Integer)get(apiPlugin,"bridgeApi"))==-1,"reset() must clear the cached bridge API -- a newly pasted key may point at a different bridge entirely");
+
     String stale=EviLivePlugin.bridgeOutOfDateMessage();
     check(stale.contains("Nothing is broken"),"An older bridge WORKS; the wording must not imply a fault: "+stale);
     check(stale.toLowerCase().contains("data folder"),"It must say to keep the data folder, or someone loses their history: "+stale);
