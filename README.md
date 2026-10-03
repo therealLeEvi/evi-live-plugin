@@ -22,8 +22,9 @@ You place every trade yourself. EVI only ever shows you things.
 1. **Install the companion app.** Download it from the
    [bridge repository](https://github.com/therealLeEvi/evi-live-bridge) and start it.
 2. **That is it.** The app pairs this plugin itself — they run on the same computer, so it writes the
-   key where the plugin already looks, and the sidebar says *Paired automatically* within a few
-   seconds. No key to copy, no client restart.
+   key where the plugin already looks. Within a few seconds the sidebar says *Paired locally* if
+   RuneLite started after the app, or *Paired automatically* if it was already running. No key to
+   copy, no client restart.
 
 If RuneLite was not installed when you first ran the app, it will say so in its own window and you can
 pair by hand instead: copy the line labelled *RuneLite plugin key* and paste it into the EVI panel.

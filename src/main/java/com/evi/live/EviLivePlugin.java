@@ -649,6 +649,28 @@ public class EviLivePlugin extends Plugin {
    *  and a stat() plus a read on the client thread is exactly the class of fault a review caught
    *  here before. State is then applied on the client thread, the same shape pair() uses, with the
    *  same lifecycle guard so a plugin stopped mid-read cannot resurrect itself. */
+  /** Whether to look at plugin-key.txt again on this tick.
+   *
+   *  A REFUSED key has to keep looking, and that is the whole point of this method existing. The
+   *  first version only polled when no key was held, so a player who had pasted the Scanner key by
+   *  mistake -- the documented easy error, behind two user bug reports -- kept sending it and kept
+   *  getting 401s even after the app had written the right key into the file. Only restarting the
+   *  client cured it, which is exactly the thing auto-pairing was built to end. The end-to-end test
+   *  missed it because it DELETED the key first, so it only ever exercised the no-key path.
+   *
+   *  A key that is working is deliberately NOT re-read: there is no reason to stat a file every few
+   *  seconds while nothing is wrong. */
+  static boolean shouldPollForPairingKey(String pluginKey, boolean keyRejected) {
+    return pluginKey==null || keyRejected;
+  }
+  /** Whether a key just read from that file replaces the one in use.
+   *
+   *  The differs check is load-bearing, not tidiness: while a key is being refused this polls every
+   *  few seconds, and adopting an IDENTICAL key would call reset() each time, restarting the session
+   *  on a loop. Only a genuinely different key is adopted. */
+  static boolean shouldAdoptPairingKey(String fileKey, String pluginKey) {
+    return fileKey!=null && !fileKey.equals(pluginKey);
+  }
   private void pollForPairingKey() {
     if(pairingPath==null || sender==null || ++pairingPollTicks<PAIRING_POLL_TICKS)return;
     pairingPollTicks=0;
@@ -660,18 +682,21 @@ public class EviLivePlugin extends Plugin {
         key=PairingKey.normalize(readTrimmed(pairingPath));
       } catch(Exception ex){return;} // absent, half-written or invalid: just look again shortly
       clientThread.invokeLater(()->{
-        if(!running || generation!=lifecycle || pluginKey!=null)return;
+        if(!running || generation!=lifecycle || !shouldAdoptPairingKey(key,pluginKey))return;
+        final boolean replacing=pluginKey!=null;
         synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
         keyRejected=false;
         reset();
-        status("Paired automatically by the EVI companion app.");
+        status(replacing?"The EVI companion app replaced the key the bridge was refusing."
+                      :"Paired automatically by the EVI companion app.");
         refreshPairingVisibility();
       });
     });
   }
   @Subscribe public void onGameTick(GameTick e) {
     if(!running)return;
-    if(pluginKey==null){pollForPairingKey();return;}
+    if(shouldPollForPairingKey(pluginKey,keyRejected))pollForPairingKey();
+    if(pluginKey==null)return;
     if(client.getGameState()!=GameState.LOGGED_IN)return;
     try { suggestionHintWidget.update(); } catch (Exception ignored) { } // never let a widget hiccup break observation
     try { itemSelectWidget.update(); } catch (Exception ignored) { }
