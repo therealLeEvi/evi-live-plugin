@@ -1,4 +1,4 @@
-# EVI Live (Local)
+# EVI Flipping Assistant
 
 **EVI works out what to flip on the Grand Exchange, and shows it to you while you trade.**
 
@@ -20,11 +20,14 @@ You place every trade yourself. EVI only ever shows you things.
 ## Getting started
 
 1. **Install the companion app.** Download it from the
-   [bridge repository](https://github.com/therealLeEvi/evi-live-bridge) and start it. It opens a
-   setup page in your browser, and prints two keys in its own window.
-2. **Copy the plugin key** from the companion app's window — the line labelled *RuneLite plugin key*.
-   It is not the scanner key, which is the one the setup page asks for to open itself.
-3. **Open the EVI panel in RuneLite**, paste the plugin key, and click save.
+   [bridge repository](https://github.com/therealLeEvi/evi-live-bridge) and start it.
+2. **That is it.** The app pairs this plugin itself — they run on the same computer, so it writes the
+   key where the plugin already looks, and the sidebar says *Paired automatically* within a few
+   seconds. No key to copy, no client restart.
+
+If RuneLite was not installed when you first ran the app, it will say so in its own window and you can
+pair by hand instead: copy the line labelled *RuneLite plugin key* and paste it into the EVI panel.
+That is not the scanner key, which is the one the app's setup page asks for to open itself.
 
 That is the whole setup. From then on EVI watches the offers you place and starts suggesting trades.
 The longer you use it, the more it has to go on — but it gives useful suggestions from day one, with

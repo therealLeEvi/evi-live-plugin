@@ -43,7 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions. */
-@PluginDescriptor(name="EVI Live (Local)",internalName="evi-live",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
+@PluginDescriptor(name="EVI Flipping Assistant",internalName="evi-live",description="Suggests what to flip: what to buy, how many and at what price, shown in the offer box with a hotkey to fill it in. Needs a free companion app on this computer; nothing leaves it",tags={"grand exchange","ge","flipping","flip","merching","merch","profit","suggestion","hotkey","evi","local"})
 public class EviLivePlugin extends Plugin {
   private static final Logger log=LoggerFactory.getLogger(EviLivePlugin.class);
   @Inject private Client client;
@@ -158,7 +158,7 @@ public class EviLivePlugin extends Plugin {
   // buyers have stopped paying. Raised BEFORE 3.11.0 shipped rather than waiting for a later release
   // -- the plugin is the slow half, and a bridge-only fix can only be announced by a plugin, so the
   // chance to tell people was now or indefinitely later.
-  static final int EXPECTED_BRIDGE_API=4;
+  static final int EXPECTED_BRIDGE_API=5;
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
@@ -635,8 +635,44 @@ public class EviLivePlugin extends Plugin {
       reset();
     }
   }
+  /** Ticks between looks at the key file while unpaired. ~5s at 600ms, so pairing feels instant
+   *  without putting a stat() on every tick. */
+  private static final int PAIRING_POLL_TICKS=8;
+  private int pairingPollTicks;
+  /** Pick up a key the companion app wrote into plugin-key.txt, so nobody has to copy one.
+   *
+   *  The app and this plugin are on the same machine by definition -- the plugin only ever talks to
+   *  127.0.0.1 -- so the app can simply write the key where this already reads it. Without this the
+   *  player would still have to restart the client once for a key that is sitting right there.
+   *
+   *  The read happens on the sender thread, never on the client thread: this runs from onGameTick,
+   *  and a stat() plus a read on the client thread is exactly the class of fault a review caught
+   *  here before. State is then applied on the client thread, the same shape pair() uses, with the
+   *  same lifecycle guard so a plugin stopped mid-read cannot resurrect itself. */
+  private void pollForPairingKey() {
+    if(pairingPath==null || sender==null || ++pairingPollTicks<PAIRING_POLL_TICKS)return;
+    pairingPollTicks=0;
+    final long generation=lifecycle;
+    sender.execute(()->{
+      final String key;
+      try {
+        if(!pairingPath.exists())return;
+        key=PairingKey.normalize(readTrimmed(pairingPath));
+      } catch(Exception ex){return;} // absent, half-written or invalid: just look again shortly
+      clientThread.invokeLater(()->{
+        if(!running || generation!=lifecycle || pluginKey!=null)return;
+        synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
+        keyRejected=false;
+        reset();
+        status("Paired automatically by the EVI companion app.");
+        refreshPairingVisibility();
+      });
+    });
+  }
   @Subscribe public void onGameTick(GameTick e) {
-    if(!running || pluginKey==null || client.getGameState()!=GameState.LOGGED_IN)return;
+    if(!running)return;
+    if(pluginKey==null){pollForPairingKey();return;}
+    if(client.getGameState()!=GameState.LOGGED_IN)return;
     try { suggestionHintWidget.update(); } catch (Exception ignored) { } // never let a widget hiccup break observation
     try { itemSelectWidget.update(); } catch (Exception ignored) { }
     refreshCashStack();
