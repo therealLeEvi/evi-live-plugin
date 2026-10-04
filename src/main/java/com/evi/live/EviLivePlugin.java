@@ -43,7 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions. */
-@PluginDescriptor(name="EVI Flipping Assistant",internalName="evi-live",description="Suggests what to flip: what to buy, how many and at what price, shown in the offer box with a hotkey to fill it in. Needs a free companion app on this computer; nothing leaves it",tags={"grand exchange","ge","flipping","flip","merching","merch","profit","suggestion","hotkey","evi","local"})
+@PluginDescriptor(name="EVI Live (Local)",internalName="evi-live",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
 public class EviLivePlugin extends Plugin {
   private static final Logger log=LoggerFactory.getLogger(EviLivePlugin.class);
   @Inject private Client client;

@@ -1,4 +1,4 @@
-# EVI Flipping Assistant
+# EVI Live (Local)
 
 **EVI works out what to flip on the Grand Exchange, and shows it to you while you trade.**
 
