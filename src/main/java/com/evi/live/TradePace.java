@@ -4,8 +4,8 @@ package com.evi.live;
  * How long the player is willing to wait for one trade, in the scanner's own words.
  *
  * Replaces {@link TradeDuration}, whose nine options were labelled in minutes and promised
- * something the market does not deliver. Measured over 60 days of archived prices with
- * tools/hold-length.mjs, replaying the real ranking and holding each pick for exactly as long as
+ * something the market does not deliver. Measured over 60 days of archived prices by
+ * replaying the real ranking and holding each pick for exactly as long as
  * the setting claimed: at ~5 minutes, ~30 minutes and ~1 hour, **not one round trip completed
  * inside its own window** at any cash stack tested (50k, 10m and 380m), leaving 100% of the
  * capital still tied up when the window ended. Those settings were not describing fast trades;

@@ -16,12 +16,10 @@ import net.runelite.api.widgets.WidgetType;
  * This project previously declined to build this: the fix available at the time (either an
  * unverified ScriptID.GE_ITEM_SEARCH call, or dispatching synthetic KeyEvents into the game's own
  * input pipeline to fake real typing) looked, on the information available then, like it crossed
- * into the kind of input-automation OSRS's rules are cautious about, and the player's own read on
- * that was accepted rather than argued with. What changed: Flipping Copilot's actual source
+ * into the kind of input-automation OSRS's rules are cautious about, and the maintainer's own read on
+ * that was accepted rather than argued with. What changed: Flipping Copilot's actual published source
  * (github.com/cbrewitt/flipping-copilot, specifically
- * controller/GePreviousSearch.java -- fetched via GitHub's REST API, api.github.com/repos/..., a
- * route that worked here where a plain raw.githubusercontent.com/GitHub-web fetch of this same
- * fork had been blocked earlier in this project) shows its equivalent row uses neither of those
+ * controller/GePreviousSearch.java) shows its equivalent row uses neither of those
  * two paths. It does this instead:
  *
  *   widget.setOnOpListener(754, itemId, 84);

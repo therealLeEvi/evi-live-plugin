@@ -29,7 +29,7 @@ dependencies {
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '3.12.1'
+version = '4.0.0'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -47,10 +47,6 @@ tasks.register('gamevalTest', JavaExec) {
     mainClass = 'com.evi.live.GamevalConstantsTest'
 }
 
-tasks.register('pairingTest', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'com.evi.live.PairingKeyTest'
-}
 tasks.register('panelTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.EviLivePanelTest'
@@ -84,7 +80,250 @@ tasks.register('itemSelectTest', JavaExec) {
     mainClass = 'com.evi.live.EviLiveItemSelectWidgetTest'
     systemProperty 'java.awt.headless', 'true'
 }
+// The maintainer's 6 Oct 2026 decisions: risk level and market-wide on new keyNames, the sidebar's three risk
+// buttons (Layout B), and a Skip that lasts four hours per account across hops and restarts.
+tasks.register('riskSkipTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveRiskSkipTest'
+    systemProperty 'java.awt.headless', 'true'
+    // 7 Oct 2026: the risk levels are hidden and no odds ("1 in X") may appear anywhere in the plugin; the test scans
+    // src/main and the Hub listing for them, so both are inputs (an edit there reruns it).
+    systemProperty 'evi.mainSource', file('src/main').absolutePath
+    inputs.dir('src/main')
+    inputs.file('runelite-plugin.properties')
+}
+// The journal engine (com.evi.live.journal), ported from the bridge's store.mjs/tax.mjs for the
+// self-contained plugin, and the parity proof that it answers exactly as the JS engine does.
+//   journalIntentTest   the traps, written as intent (half-up ties, the tax cap, probes, accounts, locale)
+//   journalVectorsTest  generated edge cases, every expectation a recorded JS answer, journal lines byte for byte
+//   parityTest          every public golden transcript recorded from the real bridge
+// Public fixtures are synthetic and live in src/test/resources/parity (copied there from the project's recorder).
+tasks.register('journalIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.journal.JournalIntentTest'
+}
+tasks.register('journalVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.journal.JournalVectorsTest'
+}
+tasks.register('parityTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.journal.JournalParityTest'
+}
+// The plugin's OWN journal: per-account files through Filepath, restart reload, two clients at once, the opt-in
+// import, and the rule that every journal file operation runs on its own thread. Synthetic data only (public transcripts and written packets).
+tasks.register('pluginJournalTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.journal.PluginJournalTest'
+}
+// The plugin's wiring of that journal: the packet text handed over from the client thread, settings defaults,
+// and shutDown() stopping the journal's executor.
+tasks.register('journalWiringTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveJournalWiringTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+// The Plugin Hub's forbidden-API list (revised 6 Oct 2026) over every main source file, comments and strings
+// removed first: reflection, JNI/JNA, subprocesses, runtime code loading, Thread.sleep/interrupt, java.io file
+// APIs, network clients other than OkHttp, our own Gson/OkHttp instances, Filepath.Unchecked, and the rest.
+// The scanner proves itself on known-bad and known-good snippets before it reads the source.
+tasks.register('hubRulesTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.HubRulesScanTest'
+    systemProperty 'evi.mainSource', file('src/main/java').absolutePath
+    inputs.dir('src/main/java')
+}
+// The maintainer's 6 Oct 2026 sidebar decisions, as the words a player reads: the import line (only while the import is on
+// and its file missing), every buy card's TOTAL COST (en-US, long arithmetic), and High with "No limit" named on the risk
+// line -- through a real PluginJournal, the plugin's own wiring and a real RuneLite ConfigManager. Synthetic data only.
+tasks.register('sidebarLinesTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveSidebarLinesTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+// The price-data layer (com.evi.live.market, self-contained stage B phase 2) and its parity with the bridge's JS readers.
+//   marketParityTest   every public synthetic vector recorded from the real bridge JS (tools/parity-market-vectors.mjs),
+//                      through the list ports AND the plugin's own per-hour archive read by build(); 0 divergences
+//   marketIntentTest   the traps as intent: half-up rounding, the one network class (URLs, User-Agent, threads, one in
+//                      flight), files never moved over, two clients, the scheduler's order, spacing, back-off, shutdown
+//   marketMemoryTest   heap kept and peak for a 336-hour build at the real archive's size, under -Xmx768m
+tasks.register('marketParityTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.market.MarketParityTest'
+    maxHeapSize = '1g'
+}
+tasks.register('marketIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.market.MarketIntentTest'
+    systemProperty 'java.awt.headless', 'true'
+    systemProperty 'evi.projectDir', projectDir.absolutePath
+    systemProperty 'evi.gradleVersion', project.version.toString()
+}
+tasks.register('marketMemoryTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.market.MarketMemoryTest'
+    maxHeapSize = '768m'
+}
+// The engine core (com.evi.live.engine, self-contained Phase 3a): sizing, the gates, the slots, cost basis, spread rank, focus,
+// prices, the two medians and query cash, against what the REAL JS engine answered (tools/parity-engine-vectors.mjs): every
+// input the JS tests pass those functions, ~13k generated edge cases, and the three tiers' cap order. Synthetic; 0 divergences.
+//   engineIntentTest   the traps as intent: the unsigned spread bucket, absent cash against zero, the measured-zero precedence,
+//                      half-up ties, the account scoping, the cap order, and nothing user-visible wired yet
+tasks.register('engineVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.EngineVectorsTest'
+    maxHeapSize = '1g'
+}
+tasks.register('engineIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.EngineIntentTest'
+}
+// Phase 3b: sell support, the pick chain, the holding / idle-stock / history tiers and the verdict.
+//   tierVectorsTest       every input the JS tests pass those functions, ~6,900 generated cases, 900 scripted pick chains and
+//                         900 sell-support judgements cut from server.mjs, against the REAL JS answers; 0 divergences
+//   tierIntentTest        the traps as intent: the chain cannot forget to wait, held back is never shown, the shared blocklist,
+//                         a loss always speaks, account scoping, idle stock, the support window, the stale cap, the tax bar
+//                         at support, Auto, number formatting on a Dutch host, the "+-0" verdict, and nothing wired yet
+//   engineTranscriptTest  EVERY golden transcript of the real bridge (tier, advice, journal, market and decide scenarios),
+//                         replayed through the PRODUCTION Engine.decide and its serialiser (ResponseJson): the whole
+//                         GET /api/suggestion body compared field for field; 0 divergences
+//   engineDecideIntentTest Engine.decide's own rules no transcript carries: the preferences (spread clamped 1-10), the
+//                         query as URLSearchParams reads it, the 502s for a missing input, the account view tied to the
+//                         request, and the body's shape
+tasks.register('tierVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.TierVectorsTest'
+    maxHeapSize = '1g'
+}
+tasks.register('tierIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.TierIntentTest'
+    systemProperty 'evi.mainSource', file('src/main/java').absolutePath
+    inputs.dir('src/main/java')
+}
+tasks.register('engineTranscriptTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.EngineTranscriptTest'
+    maxHeapSize = '1g'
+}
+tasks.register('engineDecideIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.EngineDecideIntentTest'
+}
+// Phase 4: the remaining safety checks and advice -- the thin market, the crash watch, relist / sell / buy / buy-progress /
+// holdings advice and the fill model, ported as pure functions (correlation is a documented seam: it needs more archive
+// than the plugin keeps).
+//   adviceVectorsTest     every input the JS tests pass those functions, ~7,400 generated cases at every threshold and the
+//                         scripted crash-watch sequences, against the REAL JS answers; 0 divergences
+//   adviceIntentTest      the traps as intent: below break-even speaks whatever the gap, the 1.5% / 5% / 15-minute rules,
+//                         buy progress never predicts, holdings take no minimum profit, probes teach the fill model nothing,
+//                         a crash demotes, account scoping, a Dutch host, and nothing user-visible wired yet
+//   adviceTranscriptTest  every golden transcript's relistAdvice (the cards the plugin draws under Active offers), composed
+//                         from the Java journal state by AdviceNotes and compared with what the real bridge sent
+tasks.register('adviceVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.AdviceVectorsTest'
+    maxHeapSize = '1g'
+}
+tasks.register('adviceIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.AdviceIntentTest'
+    systemProperty 'evi.mainSource', file('src/main/java').absolutePath
+    inputs.dir('src/main/java')
+}
+tasks.register('adviceTranscriptTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.AdviceTranscriptTest'
+    maxHeapSize = '1g'
+}
+// Self-contained stage 2: the market tier (MarketTier: computeMarketSuggestion, and the request's rankers -- server.mjs's rank
+// and marketRankAt) behind LevelSettings with today's values.
+//   marketTierVectorsTest  every input the JS tests pass the tier (booted bridges included), ~3,000 generated cases (ties,
+//                          huge prices, one-sided quotes, absent vs zero, Bigger positions, stack shares, paces, spread ranks,
+//                          every sentence) and 600 queries through the rankers cut from server.mjs, against the REAL JS
+//   marketTierIntentTest   the traps as intent: rank on the steady price and quote the live one, ties keep the mapping's
+//                          order, the unsigned spread bucket on the primary rank only (the bridge's wiring gap, as it is),
+//                          absent cash against zero, the per-window limit sentence, the Bigger-positions sentence, a Dutch host
+tasks.register('marketTierVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.MarketTierVectorsTest'
+    maxHeapSize = '1g'
+}
+tasks.register('marketTierIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.MarketTierIntentTest'
+    systemProperty 'evi.mainSource', file('src/main/java').absolutePath
+    inputs.dir('src/main/java')
+}
+// 8 Oct 2026: the opt-in ~6 hours forecast from the plugin's own archive (the ~1 hour and Overnight settings retired).
+//   forecastVectorsTest  forecastFromSeries / fillOutlook / fillOutlookSentence against the REAL JS
+//                        (tools/parity-forecast-vectors.mjs), the archive's 36-point series against the whole series, the hook,
+//                        and the wiring through decide and the real in-process engine thread
+tasks.register('forecastVectorsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.ForecastVectorsTest'
+}
+// The plugin's own engine (4.0.0: the only mode).
+//   inProcessEngineTest  the in-process engine (com.evi.live.inprocess) through its real thread and a real plugin journal: with the
+//                        336-hour basis every in-scope transcript poll AGREES with the recorded body (the old companion app's answer);
+//                        one hour short no buy, no further position, no reachable figure, while every recorded SELL and the advice still
+//                        speak; the price-history line; the query without the buy tiers; the thread (never blocking, newest wins, never
+//                        the client thread/EDT); the price layer's archive read (ReadHoursCheck)
+//   inProcessWiringTest  the plugin: no bridge code at all, no bridge or pairing wording visible, draws the engine's answer and the
+//                        price-history line, never runs decide on the calling thread, never blocks the poll; the one-voice-per-offer rule
+tasks.register('inProcessEngineTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.inprocess.InProcessEngineTest'
+    maxHeapSize = '1g'
+}
+tasks.register('inProcessWiringTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveInProcessWiringTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+// Decision 12 (8 Oct): the sidebar's buttons persisted by the plugin.
+//   inProcessButtonsTest  every golden transcript with a sidebar press, replayed through the plugin's OWN stores (journal marks,
+//                         the block list, the profit reset, the suggestion records) and the real engine thread, restarting the
+//                         plugin wherever the recording restarted: every body the recorded one, every suggestion id the recorded one,
+//                         every press taken or refused as recorded, the marks unchanged across a final restart
+//   inProcessStoresTest   the stores themselves: the id scheme and repeat key against the JS, acceptances newest-wins and read
+//                         back after a restart, the outcome join against the JS (exact price, not price+1), the block list, the
+//                         kept-count reading, and the plugin: what each button writes, per account or global, across a new plugin
+//                         instance
+tasks.register('inProcessButtonsTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.inprocess.InProcessButtonsTest'
+    maxHeapSize = '1g'
+}
+tasks.register('inProcessStoresTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveInProcessStoresTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+// 4.0.0: the release itself, as facts -- the Hub listing ASCII and as decided, the descriptor agreeing, one version, the
+// internalName evi-flipping everywhere it is named, and the config migration through a real RuneLite ConfigManager.
+tasks.register('releaseListingTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.ReleaseListingTest'
+    systemProperty 'evi.projectDir', projectDir.absolutePath
+    inputs.file('runelite-plugin.properties')
+    inputs.file('settings.gradle')
+    inputs.file('build.gradle')
+    inputs.dir('src/main')
+}
 // gamevalTest asserts every client id in GeIds equals the deprecated constant it replaced. It is in
 // `check` deliberately: the ids are the one thing in this plugin a game update can silently move
 // under us, which is exactly what happened on 30 Sept 2026.
-tasks.named('check') { dependsOn 'observationTest', 'pairingTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest' }
+// Voluntary trade-log sharing (9 Oct 2026): the CSV the player saves and sends themselves, and the sidebar invitation.
+tasks.register('tradeLogExportTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.journal.TradeLogExportTest'
+}
+tasks.register('shareInviteTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.ShareInviteTest'
+    systemProperty 'java.awt.headless', 'true'
+}
+tasks.named('check') { dependsOn 'observationTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest', 'riskSkipTest', 'journalIntentTest', 'journalVectorsTest', 'parityTest', 'pluginJournalTest', 'journalWiringTest', 'hubRulesTest', 'sidebarLinesTest', 'marketParityTest', 'marketIntentTest', 'marketMemoryTest', 'engineVectorsTest', 'engineIntentTest', 'tierVectorsTest', 'tierIntentTest', 'engineTranscriptTest', 'engineDecideIntentTest', 'adviceVectorsTest', 'adviceIntentTest', 'adviceTranscriptTest', 'marketTierVectorsTest', 'marketTierIntentTest', 'forecastVectorsTest', 'inProcessEngineTest', 'inProcessWiringTest', 'inProcessButtonsTest', 'inProcessStoresTest', 'releaseListingTest', 'tradeLogExportTest', 'shareInviteTest' }
+// Test tasks log to the console only, never into the real ~/.runelite/logs/client.log (src/test/logback-tests.xml); `run` keeps RuneLite's.
+tasks.withType(JavaExec).matching { it.name != 'run' }.configureEach { systemProperty 'logback.configurationFile', file('src/test/logback-tests.xml').absolutePath }

@@ -11,6 +11,7 @@ import java.awt.image.BufferedImage;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -18,8 +19,9 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
-import javax.swing.JPasswordField;
+import javax.swing.JPopupMenu;
 import javax.swing.JTextArea;
 import javax.swing.text.DefaultCaret;
 import javax.swing.SwingConstants;
@@ -34,28 +36,26 @@ import net.runelite.client.ui.PluginPanel;
  * other plugin's own panel, and the client shell itself, already uses) for all its neutral chrome
  * -- panel/section backgrounds, borders, body text -- plus EviTheme.BRAND as the one accent color,
  * so this reads as a native part of RuneLite rather than plain Swing/OS-native controls (a white
- * JPasswordField, a stock gray JButton) sitting on top of it. Grouped into three visually distinct
- * sections (about, suggestion, pairing) separated by a thin top border and spacing, rather than one
- * unstructured stack of labels.
+ * JPasswordField, a stock gray JButton) sitting on top of it. Grouped into visually distinct
+ * sections separated by a thin top border and spacing, rather than one unstructured stack of labels.
  */
 final class EviLivePanel extends PluginPanel {
-  private final JTextArea status = bodyText("Waiting for setup.");
+  private final JTextArea status = bodyText("Starting up.");
   private final JTextArea suggestion = bodyText("No suggestion yet.");
   /** The signature of the card currently drawn, or null when the plain paragraph is showing.
    *  Stops the two-second poll relaying out the sidebar when nothing about the pick has changed. */
   private String shownCard = null;
-  /** Everything to do with pairing, kept together so it can be hidden in one move once a key is saved. */
-  private final JPanel pairingSection = new JPanel();
-  /** A six-pixel square beside the status line: green when the bridge answered, the warn colour when it
-   *  has not. Read from the message itself rather than a second signal, because every caller already
+  /** A six-pixel square beside the status line: green once the OSRS Wiki prices have arrived, the warn colour until
+   *  then. Read from the message itself rather than a second signal, because every caller already
    *  writes one and the alternative was an overload on a method used from a dozen places. */
   private final JPanel connectionDot = new JPanel();
-  /** How many items this session has set aside, and the way to get them back. Hidden at zero.
+  /** How many items are set aside right now, and the way to get them back. Hidden at zero. Since
+   *  6 Oct 2026 that is the session's own exclusions plus this account's four-hour Skips.
    *
    *  It exists because the list was invisible and one-way. Every Skip, Block, "Mark as personal use"
    *  and "I don't have this anymore" adds to it, as does a stale holding EVI re-checks and drops, and
    *  it only ever cleared on a profile change or a client restart. On 28 Sept 2026 a player worked down
-   *  from a 441,621 gp 3rd Age robe to a Blighted teleport spell sack worth a few hundred, and the
+   *  from a pick worth a few hundred thousand gp to one worth a few hundred, and the
    *  cause was not the ranking or any floor -- it was that everything better had quietly been set
    *  aside earlier in the session, with nothing on screen saying so or offering it back. */
   private final JLabel skipCount = new JLabel();
@@ -76,8 +76,40 @@ final class EviLivePanel extends PluginPanel {
   private String shownAlso = "";
   /** The advice about offers already placed, one small card each. */
   private final JPanel adviceList = new JPanel();
-  /** "Your companion app is out of date", under the connection line. Hidden when there is nothing to say. */
-  private final JTextArea staleBridge = new JTextArea();
+  /** "Import is on, but no file was found ...", under the connection line. Hidden unless the journal says so.
+   *  Package-private so a test can read it without reflection. */
+  final JTextArea importNote = bodyText("");
+  /** One blocked item in the Blocked items list: its id (what Unblock sends back) and the name shown. */
+  static final class BlockedRow {
+    final int itemId;
+    final String name;
+
+    BlockedRow(int itemId, String name) {
+      this.itemId = itemId;
+      this.name = name;
+    }
+  }
+  /** The Blocked items list's heading, rows and its one plain line (a failed Unblock). Hidden until the built-in engine shows a
+   *  list; package-private so a test can read them. */
+  final JLabel blockedHeader = sectionHeader("Blocked on this character");
+  final JPanel blockedList = new JPanel();
+  final JTextArea blockedNote = bodyText("");
+  /** What an Unblock button calls with its item id (the plugin's unblockItem); nothing until the plugin sets it. */
+  private volatile java.util.function.IntConsumer unblock = id -> { };
+  /** What a holding line's menu calls with that line (the plugin's holdingLinePersonalUse / holdingLineGone); nothing until
+   *  the plugin sets them. */
+  private volatile Consumer<EviLivePlugin.AdviceCard> linePersonalUse = c -> { };
+  private volatile Consumer<EviLivePlugin.AdviceCard> lineGone = c -> { };
+  /** What the list shows now, so a poll that changes nothing does not relayout the sidebar. */
+  private String shownBlocked = "";
+  /** "Loading price history: 140 of 336 hours. ...", under the connection line. Shown only while buy suggestions wait for
+   *  the price history; hidden otherwise. A bodyText, so its caret is pinned. Package-private so a test can read it without reflection. */
+  final JTextArea backfillNote = bodyText("");
+  /** The invitation to share a trade log, at the very bottom: a rule, the line, "Save my trade log..." and "Not now", and the
+   *  muted line under them. Hidden until the plugin shows it. Package-private so a test can read it without reflection. */
+  final JPanel shareSection = new JPanel();
+  private volatile Runnable shareSaveAction = () -> { };
+  private volatile Runnable shareNotNowAction = () -> { };
   /** What the list currently shows, so a poll that changes nothing does not relayout the sidebar. */
   private String shownAdvice = "";
   // Held so suggestionWarning can recolour its accent stripe, exactly as an offer row carries its own.
@@ -86,12 +118,28 @@ final class EviLivePanel extends PluginPanel {
   private volatile boolean warned;
   private final JTextArea offerHint = bodyText("");
   // The realised total is split in two on purpose: the figure carries the colour, the line below it
-  // carries the caveats. Colouring one text area would paint "Not counted: 17 sales EVI never saw
+  // carries the caveats. Colouring one text area would paint "Not counted: 9 sales EVI never saw
   // bought" green as well, which reads as if those were profit -- the precise misreading that line
   // exists to prevent.
   private final JLabel profitFigure = new JLabel(" ");
-  private final JTextArea profitLine = bodyText("Waiting for the bridge.");
+  private final JTextArea profitLine = bodyText("Waiting for your trade record.");
   private final JPanel offerList = new JPanel();
+  /** The three risk buttons, Low / Medium / High, in RiskLevel order. All drawn identically; the chosen
+   *  one differs ONLY by a lighter outline (see paintRisk). */
+  private final JButton[] riskButtons = new JButton[RiskLevel.values().length];
+  /** The one quiet line under the buttons: the chosen level's aim. */
+  private final JTextArea riskAim = bodyText(RiskLevel.LOW.aim());
+  /** Which level the buttons currently show, so a theme switch can redraw the right outline. */
+  private volatile RiskLevel shownRisk = RiskLevel.LOW;
+  /** The player's "Max share of cash per trade", as last told; null until the plugin says. It decides whether the
+   *  High line names the missing trade-size limit. */
+  private volatile MaxTradeShare shownShare;
+  /** Client-property key carrying a risk button's level. */
+  static final String RISK = "eviRisk";
+  /** Every component of the Risk level section -- its rule, heading, button row and the line under it -- so ONE
+   *  switch (RiskLevel.SHOWN) shows or hides all four together. Hidden since 7 Oct 2026; BoxLayout gives an
+   *  invisible child no room, so a hidden section leaves no gap. */
+  final List<JComponent> riskSection = new java.util.ArrayList<>();
 
   // What a component is, so applyTheme can repaint it: "bg" panel background, "card" a raised card,
   // "accent" EVI-coloured text, "text" body text, "muted" a section heading, "button", "field",
@@ -99,25 +147,30 @@ final class EviLivePanel extends PluginPanel {
   private static final String ROLE = "eviRole";
   private static <T extends JComponent> T role(T c, String role) { c.putClientProperty(ROLE, role); return c; }
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld) {
-    this(pair, skip, personalUse, notHeld, () -> { }, () -> { });
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld) {
+    this(skip, personalUse, notHeld, () -> { }, () -> { });
   }
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block) {
-    this(pair, skip, personalUse, notHeld, block, () -> { });
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block) {
+    this(skip, personalUse, notHeld, block, () -> { });
   }
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block, Runnable resetProfit) {
-    this(pair, skip, personalUse, notHeld, block, resetProfit, () -> { });
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block, Runnable resetProfit) {
+    this(skip, personalUse, notHeld, block, resetProfit, () -> { });
   }
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
                Runnable resetProfit, Runnable clearSkips) {
-    this(pair, skip, personalUse, notHeld, block, resetProfit, clearSkips, () -> { });
+    this(skip, personalUse, notHeld, block, resetProfit, clearSkips, () -> { });
   }
 
-  EviLivePanel(Consumer<String> pair, Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
                Runnable resetProfit, Runnable clearSkips, Runnable accept) {
+    this(skip, personalUse, notHeld, block, resetProfit, clearSkips, accept, level -> { });
+  }
+
+  EviLivePanel(Runnable skip, Runnable personalUse, Runnable notHeld, Runnable block,
+               Runnable resetProfit, Runnable clearSkips, Runnable accept, Consumer<RiskLevel> chooseRisk) {
     this.clearSkips = clearSkips;
     setLayout(new BorderLayout());
     role(this, "bg");
@@ -128,7 +181,7 @@ final class EviLivePanel extends PluginPanel {
     content.setBorder(BorderFactory.createEmptyBorder(12, 10, 12, 10));
 
     // -- About --
-    JLabel title = new JLabel("EVI Live · Local");
+    JLabel title = new JLabel("EVI Live");
     title.setFont(FontManager.getRunescapeBoldFont());
     role(title, "accent");
     title.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -145,9 +198,9 @@ final class EviLivePanel extends PluginPanel {
     // the one card the player reads most the only part of the sidebar that did not look like the
     // rest of the client. The stripe keeps EVI's teal, and turns orange for a sale that would lose
     // GP right now -- the same colour an offer row uses for its own in-progress state. --
-    // -- Realised profit since the count began, with a Reset. Deliberately the bridge's own matched-flip
-    // total, the same number the scanner shows, and it says what it leaves out rather than rounding the
-    // story: unmatched sales and unsold purchases are not profit. --
+    // -- Realised profit since the count began, with a Reset. Deliberately the journal's own matched-flip
+    // total, and it says what it leaves out rather than rounding the story: unmatched sales and unsold
+    // purchases are not profit. --
     content.add(section());
     content.add(sectionHeader("Profit since counting began"));
     profitFigure.setFont(FontManager.getRunescapeBoldFont());
@@ -158,10 +211,47 @@ final class EviLivePanel extends PluginPanel {
     content.add(profitLine);
     JButton resetButton = secondaryButton("Reset profit count");
     resetButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-    resetButton.getAccessibleContext().setAccessibleDescription("Starts this profit line counting from now. Your trade records, flips and the dashboard's own total are untouched.");
+    resetButton.getAccessibleContext().setAccessibleDescription("Starts this profit line counting from now. Your trade records and flips are untouched.");
     resetButton.addActionListener(e -> resetProfit.run());
     content.add(Box.createVerticalStrut(6));
     content.add(resetButton);
+
+    // -- Risk level: Layout B of the 6 Oct 2026 mock-up, chosen by the maintainer. Between the profit and the
+    // pick on purpose -- the choice sits right above the result it shapes, and a press shows on the
+    // next poll. Three EQUAL buttons: same face, same font, same text colour, nothing filled. The
+    // chosen one is marked by a lighter outline and nothing else, because the panel must never give
+    // one level visual prominence that nudges a player into it (the sidebar rule that rejected an
+    // orange "I took this one"). Deliberately NO green/amber/red anywhere in this row: those colours
+    // already mean the verdict, and a green Low would read as "recommended", a red High as a warning.
+    // Pressing one writes the same config key the settings panel uses (see EviLivePlugin.chooseRisk),
+    // so the two can never disagree. --
+    // HIDDEN since 7 Oct 2026 until the levels are calibrated on live sells: built exactly as before, so the code
+    // and its tests stay whole, and shown only when RiskLevel.SHOWN is true (see the end of this block).
+    JPanel riskRule = section();
+    content.add(riskRule);
+    JLabel riskHeader = sectionHeader("Risk level");
+    content.add(riskHeader);
+    JPanel riskRow = new JPanel(new GridLayout(1, RiskLevel.values().length, 5, 0));
+    riskRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+    riskRow.setOpaque(false);
+    for (RiskLevel level : RiskLevel.values()) {
+      JButton b = new JButton(level.label());
+      b.setFont(FontManager.getRunescapeSmallFont());
+      b.setFocusPainted(false);
+      tip(b, level.aim());
+      b.putClientProperty(RISK, level);
+      b.addActionListener(e -> chooseRisk.accept(level));
+      role(b, "button");
+      riskButtons[level.ordinal()] = b;
+      riskRow.add(b);
+    }
+    paintRisk(RiskLevel.LOW);
+    riskRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, riskRow.getPreferredSize().height));
+    content.add(riskRow);
+    riskAim.setBorder(BorderFactory.createEmptyBorder(5, 0, 0, 0));
+    content.add(riskAim);
+    riskSection.addAll(Arrays.asList(riskRule, riskHeader, riskRow, riskAim));
+    for (JComponent c : riskSection) c.setVisible(RiskLevel.SHOWN);
 
     content.add(section());
     JLabel suggestionLabel = sectionHeader("Current suggestion");
@@ -198,9 +288,9 @@ final class EviLivePanel extends PluginPanel {
     notHeldButton = iconButton(EviIcons.Glyph.GONE, "Gone",
       "For something you are holding but no longer have: used in-game, or sold while EVI was not running. Whatever part of it EVI saw sold still counts toward profit.", notHeld);
     JButton skipButton = iconButton(EviIcons.Glyph.SKIP, "Skip",
-      "Set this suggestion aside for this session and check for the next-best one. Does not affect any offer you have already placed.", skip);
+      "Set this suggestion aside for 4 hours on this account and check for the next-best one. Does not affect any offer you have already placed.", skip);
     blockButton = iconButton(EviIcons.Glyph.BLOCK, "Block",
-      "Never suggest buying this item again. Undo it in the dashboard's Blocked items list. Stock you already hold still gets its sell reminder.", block);
+      BLOCK_TIP_HERE, block);
     actionRow.add(acceptButton);
     actionRow.add(personalUseButton);
     actionRow.add(notHeldButton);
@@ -221,7 +311,7 @@ final class EviLivePanel extends PluginPanel {
     clearSkipsButton.setAlignmentX(Component.LEFT_ALIGNMENT);
     clearSkipsButton.setVisible(false);
     clearSkipsButton.getAccessibleContext().setAccessibleDescription(
-      "Clears everything you have skipped, blocked for this session, or marked as personal use, so EVI can suggest those items again. Blocked items stay blocked; this only undoes the session's own list.");
+      "Clears everything you have skipped, blocked for this session, or marked as personal use, so EVI can suggest those items again. Blocked items stay blocked; this only undoes the set-aside list.");
     clearSkipsButton.addActionListener(e -> clearSkips.run());
     content.add(Box.createVerticalStrut(4));
     content.add(clearSkipsButton);
@@ -239,6 +329,20 @@ final class EviLivePanel extends PluginPanel {
     alsoList.setVisible(false);
     role(alsoList, "bg");
     content.add(alsoList);
+
+    // -- Blocked items (8 Oct 2026): the plugin keeps Block per character, and this is where it is undone -- one row per
+    // blocked item, its name and an Unblock button. Shown only while this character has something blocked, so an empty list
+    // costs no room at all. --
+    blockedHeader.setVisible(false);
+    content.add(blockedHeader);
+    blockedList.setLayout(new BoxLayout(blockedList, BoxLayout.Y_AXIS));
+    blockedList.setOpaque(false);
+    blockedList.setAlignmentX(Component.LEFT_ALIGNMENT);
+    blockedList.setVisible(false);
+    role(blockedList, "bg");
+    content.add(blockedList);
+    blockedNote.setVisible(false);
+    content.add(blockedNote);
 
     // -- Active offers: one row per occupied GE slot (see offers()), so everything sitting in the
     // GE is visible at a glance, followed by any cancel/relist or slow-fill hint for those offers
@@ -261,39 +365,6 @@ final class EviLivePanel extends PluginPanel {
     role(adviceList, "bg");
     content.add(adviceList);
 
-    // -- Pairing. One section rather than loose children, so it can be taken away entirely once the
-    // key is saved: it is setup, and setup that is done is just room the sidebar no longer has. The
-    // fields stay built and are only hidden, so clearing a key puts them back without rebuilding. --
-    pairingSection.setLayout(new BoxLayout(pairingSection, BoxLayout.Y_AXIS));
-    pairingSection.setOpaque(false);
-    pairingSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-    role(pairingSection, "bg");
-    content.add(pairingSection);
-    pairingSection.add(section());
-    pairingSection.add(sectionHeader("Pairing"));
-    pairingSection.add(bodyText("Start the EVI bridge, then paste its RuneLite plugin key below. This is not your Scanner key or Jagex login."));
-    JPasswordField key = new JPasswordField(20);
-    key.setAlignmentX(Component.LEFT_ALIGNMENT);
-    key.setMaximumSize(new Dimension(Integer.MAX_VALUE, key.getPreferredSize().height));
-    key.getAccessibleContext().setAccessibleName("RuneLite plugin key");
-    key.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-    key.setForeground(Color.WHITE);
-    key.setCaretColor(Color.WHITE);
-    key.setBorder(new CompoundBorder(
-      BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),
-      BorderFactory.createEmptyBorder(4, 6, 4, 6)));
-    pairingSection.add(key);
-    JButton save = primaryButton("Save pairing key");
-    save.setAlignmentX(Component.LEFT_ALIGNMENT);
-    save.addActionListener(e -> {
-      char[] entered = key.getPassword();
-      try { pair.accept(new String(entered)); }
-      finally { Arrays.fill(entered, '\0'); key.setText(""); }
-    });
-    pairingSection.add(Box.createVerticalStrut(6));
-    pairingSection.add(save);
-    pairingSection.add(bodyText("Saved only on this PC. Destination: 127.0.0.1:51743. No account password, chat, or inventory is collected."));
-
     // -- The status strip, last on purpose. What EVI is doing is worth a glance when it goes quiet; it
     // is not worth the top of the panel every time you look for a trade. --
     content.add(section());
@@ -308,40 +379,98 @@ final class EviLivePanel extends PluginPanel {
     strip.add(status, BorderLayout.CENTER);
     content.add(strip);
 
-    // Directly under the connection line, by the maintainer's decision on 1 Oct 2026: it is a fact ABOUT the
-    // connection, not advice about a trade, so it belongs beside the thing it describes rather than
-    // at the top of the advice list competing with offers. Hidden until there is something to say.
-    staleBridge.setVisible(false);
-    staleBridge.setAlignmentX(Component.LEFT_ALIGNMENT);
-    staleBridge.setFont(FontManager.getRunescapeSmallFont());
-    staleBridge.setLineWrap(true);
-    staleBridge.setWrapStyleWord(true);
-    staleBridge.setEditable(false);
-    staleBridge.setFocusable(false);
-    staleBridge.setOpaque(false);
-    // The same caret rule every other sidebar text area follows: a JTextArea's default caret chases
-    // setText and drags the sidebar with it on every poll. Caught by panelTest the moment this was
-    // added, which is exactly what that test is for.
-    ((DefaultCaret) staleBridge.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
-    staleBridge.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-    role(staleBridge, "warn");
-    content.add(staleBridge);
+    // The import line (the maintainer's decision, 6 Oct 2026): ONLY while "Import old trade history" is on and its
+    // file is missing. A fact about setup, so it sits with the connection line; neutral body text, never a
+    // warning colour, because nothing is wrong -- a file has not been put there yet. Hidden otherwise.
+    importNote.setVisible(false);
+    importNote.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+    content.add(importNote);
+
+    // The price-history line (Phase 6): a fact about setup, like the import line, so it sits with the connection line in
+    // neutral body text. Hidden unless the engine says buys are waiting for it.
+    backfillNote.setVisible(false);
+    backfillNote.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+    content.add(backfillNote);
+
+    // The invitation to share a trade log (9 Oct 2026, the maintainer's approved layout B): the very bottom of the sidebar, under
+    // the status strip and its notes, because it is about EVI, not about a trade. Presented PLAINLY -- the same body text and the
+    // same ordinary buttons as everything else, no accent colour, nothing filled -- because the sidebar never nudges. "Not now"
+    // hides it until the next EVI update (the plugin keeps the version it was dismissed at); hidden until the plugin says.
+    shareSection.setLayout(new BoxLayout(shareSection, BoxLayout.Y_AXIS));
+    shareSection.setOpaque(false);
+    shareSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+    shareSection.add(section());
+    shareSection.add(bodyText(ShareInvite.INVITE));
+    JPanel shareRow = new JPanel();
+    shareRow.setLayout(new BoxLayout(shareRow, BoxLayout.X_AXIS));
+    shareRow.setOpaque(false);
+    shareRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+    JButton shareSave = secondaryButton(ShareInvite.SAVE_BUTTON);
+    shareSave.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+    shareSave.addActionListener(e -> shareSaveAction.run());
+    JButton shareLater = secondaryButton(ShareInvite.NOT_NOW_BUTTON);
+    shareLater.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+    shareLater.addActionListener(e -> shareNotNowAction.run());
+    shareRow.add(shareSave);
+    shareRow.add(Box.createHorizontalStrut(5));
+    shareRow.add(shareLater);
+    shareRow.add(Box.createHorizontalGlue());
+    shareRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, shareRow.getPreferredSize().height));
+    shareSection.add(shareRow);
+    JTextArea shareNote = bodyText(ShareInvite.NOT_NOW_NOTE);
+    role(shareNote, "muted");
+    shareSection.add(shareNote);
+    shareSection.setVisible(false);
+    content.add(shareSection);
 
     add(content, BorderLayout.NORTH);
   }
 
-  /** The companion app is older than this plugin. Null or empty hides the line entirely.
-   *
-   *  Sits under the connection status rather than in the advice list: an advice card is about an
-   *  offer, and this is about the connection the whole panel depends on. EDT only. */
-  void staleBridge(String message) {
+  /** What the share invitation's two buttons call (the plugin's saveTradeLog / dismissShareInvite); nothing until it sets them. */
+  void onShare(Runnable save, Runnable notNow) {
+    shareSaveAction = save == null ? () -> { } : save;
+    shareNotNowAction = notNow == null ? () -> { } : notNow;
+  }
+
+  /** Shows or hides the share invitation ({@link ShareInvite#shown} decides which). Safe from any thread. */
+  void shareInvite(boolean show) {
+    SwingUtilities.invokeLater(() -> {
+      if (shareSection.isVisible() == show) return;
+      shareSection.setVisible(show);
+      shareSection.revalidate();
+      shareSection.repaint();
+    });
+  }
+
+  /** The import line: the journal's text to show it, null or empty to hide it. Safe from any thread. */
+  void importNotice(String message) {
     SwingUtilities.invokeLater(() -> {
       boolean show = message != null && !message.isEmpty();
-      if (show) setIfChanged(staleBridge, message);
-      staleBridge.setVisible(show);
-      staleBridge.revalidate();
-      staleBridge.repaint();
+      setIfChanged(importNote, show ? message : "");
+      if (importNote.isVisible() != show) {
+        importNote.setVisible(show);
+        importNote.revalidate();
+        importNote.repaint();
+      }
     });
+  }
+
+  /** The price-history line: the text to show it, null or empty to hide it. Safe from any thread. */
+  void backfillNotice(String message) {
+    SwingUtilities.invokeLater(() -> {
+      boolean show = message != null && !message.isEmpty();
+      setIfChanged(backfillNote, show ? message : "");
+      if (backfillNote.isVisible() != show) {
+        backfillNote.setVisible(show);
+        backfillNote.revalidate();
+        backfillNote.repaint();
+      }
+    });
+  }
+
+  /** The profit line's text before the first figure arrives. Safe from any thread. */
+  void profitWaiting(String message) {
+    SwingUtilities.invokeLater(() -> setIfChanged(profitLine, message));
   }
 
   void status(String message) {
@@ -373,7 +502,7 @@ final class EviLivePanel extends PluginPanel {
     b.setFont(FontManager.getRunescapeSmallFont());
     b.setFocusPainted(false);
     b.setMargin(new Insets(3, 0, 2, 0));
-    b.setToolTipText(description);
+    tip(b, description);
     b.getAccessibleContext().setAccessibleDescription(description);
     b.addActionListener(e -> action.run());
     role(b, "button");
@@ -389,35 +518,168 @@ final class EviLivePanel extends PluginPanel {
    *  than only what it would do: before this, pressing Personal use on a buy popped a refusal, which
    *  is a worse way to learn the same thing.
    *
-   *  "I took this one" is dimmed rather than shown doing nothing when the bridge sent no id for the
-   *  suggestion -- an older bridge cannot record an acceptance. EDT only. */
+   *  "I took this one" is dimmed rather than shown doing nothing when the suggestion carries no id
+   *  (the engine gives every suggestion one, so this should be rare). EDT only. */
   void actions(boolean canAccept, boolean accepted, boolean holding, boolean canForget, boolean buying) {
     SwingUtilities.invokeLater(() -> {
       acceptButton.setEnabled(canAccept);
       acceptButton.setText(accepted ? "Taken" : "Took it");
-      acceptButton.setToolTipText(!canAccept
-        ? "This needs a newer companion app before EVI can record what you took."
+      tip(acceptButton, !canAccept
+        ? "EVI has no record of this suggestion, so it cannot be marked as taken."
         : accepted
           ? "Recorded as taken. Press again to take that back."
           : "Tell EVI you acted on this suggestion, so it can measure whether following it actually made GP. Recorded on your own machine only; press again to take it back.");
       personalUseButton.setEnabled(holding);
-      personalUseButton.setToolTipText(holding
-        ? "Bought for your own use, not to flip. It stops being suggested and never counts toward profit. Only this purchase -- buying the item again later is unaffected."
+      tip(personalUseButton, holding
+        ? PERSONAL_USE_TIP
         : "Only applies to something you are already holding.");
       // Not just `holding`: this closes one specific purchase, so it needs a buy behind it. Gear the
       // idle-inventory tier offered was never watched being bought and has none.
       notHeldButton.setEnabled(canForget);
-      notHeldButton.setToolTipText(canForget
-        ? "You no longer have this: used in-game, or sold while EVI was not running. Whatever part of it EVI saw sold still counts toward profit."
+      tip(notHeldButton, canForget
+        ? GONE_TIP
         : holding
           ? "EVI cannot trace this back to one purchase, so there is nothing to close. Use Mine instead."
           : "Only applies to something you are already holding.");
       // Block stays buy-only on purpose: when you already own some, EVI keeps reminding you to sell
       // it, because going quiet about stock you hold is how GP gets stuck.
       blockButton.setEnabled(buying);
-      blockButton.setToolTipText(buying
-        ? "Never suggest buying this item again. Undo it in the dashboard's Blocked items list. Stock you already hold still gets its sell reminder."
+      tip(blockButton, buying
+        ? BLOCK_TIP_HERE
         : "Only applies to a buy suggestion. EVI still reminds you to sell stock you own.");
+    });
+  }
+
+  /** Shows which risk level is chosen. Called with the stored setting at startup, on every change
+   *  made in the settings panel, and on a press of one of the buttons. Null means Low, the default.
+   *  Safe from any thread. */
+  void riskLevel(RiskLevel level) {
+    RiskLevel chosen = level == null ? RiskLevel.LOW : level;
+    SwingUtilities.invokeLater(() -> paintRisk(chosen));
+  }
+
+  /** The level AND the player's "Max share of cash per trade": at High with "No limit" the line under the buttons
+   *  says plainly that nothing caps the size of one trade. Called at startup, on a change of either setting and
+   *  on a button press. Safe from any thread. */
+  void riskLevel(RiskLevel level, MaxTradeShare share) {
+    RiskLevel chosen = level == null ? RiskLevel.LOW : level;
+    SwingUtilities.invokeLater(() -> {
+      shownShare = share;
+      paintRisk(chosen);
+    });
+  }
+
+  /** EDT only. The chosen button gets the palette's TEXT colour as a 1px outline and the others its
+   *  RULE colour -- the same neutral pair a section rule and body text already use, so the marking is
+   *  quiet and works under both schemes. Everything else (face, font, text colour) is left exactly as
+   *  the theme paints every other button, which is what keeps the three equal. */
+  void paintRisk(RiskLevel chosen) {
+    shownRisk = chosen;
+    EviTheme.Palette p = EviTheme.palette();
+    for (JButton b : riskButtons) {
+      if (b == null) continue;
+      boolean on = b.getClientProperty(RISK) == chosen;
+      b.setBorder(new CompoundBorder(
+        BorderFactory.createLineBorder(on ? p.text : p.rule, 1),
+        BorderFactory.createEmptyBorder(5, 0, 5, 0)));
+      b.getAccessibleContext().setAccessibleName("Risk level " + ((RiskLevel) b.getClientProperty(RISK)).label() + (on ? ", chosen" : ""));
+      b.repaint();
+    }
+    setIfChanged(riskAim, chosen.aim(shownShare));
+  }
+
+  /** Personal use and Gone, as the card's buttons explain them when they apply -- and as a holding line's menu items do. */
+  static final String PERSONAL_USE_TIP = "Bought for your own use, not to flip. It stops being suggested and never counts toward profit. Only this purchase -- buying the item again later is unaffected.";
+  static final String GONE_TIP = "You no longer have this: used in-game, or sold while EVI was not running. Whatever part of it EVI saw sold still counts toward profit.";
+
+  /** A holding line's menu (8 Oct 2026, the maintainer's approved mock): these two choices, in this order, drawn alike -- neither is
+   *  highlighted or made to stand out (the sidebar never nudges a press). */
+  static final String LINE_PERSONAL_USE = "Personal use";
+  static final String LINE_GONE = "I don't have this anymore";
+  /** Added after a holding line's own sentence in its tooltip, so the menu can be found. ASCII. */
+  static final String LINE_MENU_HINT = "Click this line for Personal use or I don't have this anymore.";
+  /** The client property a holding line's card carries: the AdviceCard its menu acts on. Package-private for the tests. */
+  static final String HOLDING_LINE = "eviHoldingLine";
+
+  /** What a holding line's two menu items call. Any thread. */
+  void onHoldingLine(Consumer<EviLivePlugin.AdviceCard> personalUse, Consumer<EviLivePlugin.AdviceCard> gone) {
+    linePersonalUse = personalUse == null ? c -> { } : personalUse;
+    lineGone = gone == null ? c -> { } : gone;
+  }
+
+  /** The menu one holding line opens: Personal use, then I don't have this anymore. Two plain items, identical in every
+   *  respect but their words and what they do; nothing is preselected. Package-private so a test can open it without a
+   *  screen. EDT only. */
+  JPopupMenu holdingMenu(EviLivePlugin.AdviceCard c) {
+    JPopupMenu menu = new JPopupMenu();
+    JMenuItem personal = new JMenuItem(LINE_PERSONAL_USE);
+    tip(personal, PERSONAL_USE_TIP);
+    personal.addActionListener(e -> linePersonalUse.accept(c));
+    JMenuItem gone = new JMenuItem(LINE_GONE);
+    tip(gone, GONE_TIP);
+    gone.addActionListener(e -> lineGone.accept(c));
+    menu.add(personal);
+    menu.add(gone);
+    return menu;
+  }
+
+  /** Block's tooltip: per character, undone in this panel. ASCII. */
+  static final String BLOCK_TIP_HERE = "Never suggest buying this item again on this character. Undo it under Blocked items in this panel. Stock you already hold still gets its sell reminder.";
+
+  /** What each Unblock button calls with its item id. */
+  void onUnblock(java.util.function.IntConsumer action) {
+    unblock = action == null ? id -> { } : action;
+  }
+
+  /** The built-in engine's Blocked items list for the current character, ascending by id. Empty or null hides the whole section.
+   *  Rebuilt only when it changed. Any thread. */
+  void blockedItems(java.util.List<BlockedRow> rows) {
+    SwingUtilities.invokeLater(() -> {
+      StringBuilder sig = new StringBuilder();
+      if (rows != null) for (BlockedRow r : rows) sig.append(r.itemId).append('|').append(r.name).append(';');
+      if (sig.toString().equals(shownBlocked)) return;
+      shownBlocked = sig.toString();
+      blockedList.removeAll();
+      boolean any = rows != null && !rows.isEmpty();
+      blockedHeader.setVisible(any);
+      blockedList.setVisible(any);
+      if (any) {
+        EviTheme.Palette p = EviTheme.palette();
+        for (BlockedRow r : rows) {
+          JPanel row = new JPanel(new BorderLayout(6, 0));
+          row.setOpaque(false);
+          row.setAlignmentX(Component.LEFT_ALIGNMENT);
+          row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+          JLabel name = new JLabel(r.name);
+          name.setFont(FontManager.getRunescapeSmallFont());
+          role(name, "text");
+          name.setForeground(p.text);
+          tip(name, r.name);
+          JButton undo = secondaryButton("Unblock");
+          undo.setBorder(BorderFactory.createEmptyBorder(3, 8, 3, 8));
+          undo.setBackground(p.buttonFace);
+          undo.setForeground(p.buttonText);
+          tip(undo, "Let EVI suggest buying " + r.name + " again on this character.");
+          undo.getAccessibleContext().setAccessibleName("Unblock " + r.name);
+          final int id = r.itemId;
+          undo.addActionListener(e -> unblock.accept(id));
+          row.add(name, BorderLayout.CENTER);
+          row.add(undo, BorderLayout.EAST);
+          blockedList.add(Box.createVerticalStrut(3));
+          blockedList.add(row);
+        }
+      }
+      blockedList.revalidate();
+      blockedList.repaint();
+    });
+  }
+
+  /** One plain line under the Blocked items list (a failed Unblock); null or empty hides it. Any thread. */
+  void blockedNotice(String message) {
+    SwingUtilities.invokeLater(() -> {
+      boolean any = message != null && !message.isEmpty();
+      setIfChanged(blockedNote, any ? message : "");
+      if (blockedNote.isVisible() != any) blockedNote.setVisible(any);
     });
   }
 
@@ -426,7 +688,9 @@ final class EviLivePanel extends PluginPanel {
       boolean any = count > 0;
       // Cleared rather than merely hidden at zero, so nothing stale is left behind a hidden label for
       // a screen reader or a future caller to pick up.
-      skipCount.setText(!any ? "" : count == 1 ? "1 item set aside this session" : count + " items set aside this session");
+      // No longer "this session": since 6 Oct 2026 a Skip lasts four hours and outlives the session,
+      // so the line says what is set aside without claiming when it ends -- the Skip tooltip says that.
+      skipCount.setText(!any ? "" : count == 1 ? "1 item set aside" : count + " items set aside");
       skipCount.setVisible(any);
       clearSkipsButton.setVisible(any);
       skipCount.revalidate();
@@ -468,7 +732,7 @@ final class EviLivePanel extends PluginPanel {
           card.setBorder(new CompoundBorder(
             BorderFactory.createMatteBorder(0, 3, 0, 0, p.muted),
             BorderFactory.createEmptyBorder(6, 8, 6, 8)));
-          if (s.reasoning != null && !s.reasoning.isEmpty()) card.setToolTipText(s.reasoning);
+          if (s.reasoning != null && !s.reasoning.isEmpty()) tip(card, s.reasoning);
 
           JLabel name = new JLabel((++n) + ". " + (s.name == null ? "" : s.name));
           name.setFont(FontManager.getRunescapeSmallFont());
@@ -482,6 +746,14 @@ final class EviLivePanel extends PluginPanel {
             line.setForeground(p.muted);
             line.setAlignmentX(Component.LEFT_ALIGNMENT);
             card.add(line);
+          }
+          String total = totalCost(s);
+          if (total != null) {
+            JLabel cost = new JLabel(total);
+            cost.setFont(FontManager.getRunescapeSmallFont());
+            cost.setForeground(p.muted);
+            cost.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(cost);
           }
           if (s.expectedProfit != null) {
             JLabel profit = new JLabel((s.expectedProfit >= 0 ? "+" : "") + String.format("%,d", s.expectedProfit));
@@ -522,7 +794,7 @@ final class EviLivePanel extends PluginPanel {
     SwingUtilities.invokeLater(() -> {
       StringBuilder sig = new StringBuilder();
       if (cards != null) for (EviLivePlugin.AdviceCard c : cards)
-        sig.append(c.level).append(c.label).append(c.name).append(c.figures).append(c.message).append('|');
+        sig.append(c.level).append(c.label).append(c.name).append(c.figures).append(c.message).append(c.detail).append(c.itemId).append(c.buyId).append('|');
       if (sig.toString().equals(shownAdvice)) return;
       shownAdvice = sig.toString();
 
@@ -546,8 +818,8 @@ final class EviLivePanel extends PluginPanel {
         }
         // Three tones, not two. "warn" is red, "info" is the THEME'S OWN TEXT colour, and anything
         // else is amber. Before 1 Oct 2026 there were only two, so every card that was not a warning
-        // drew amber -- and the holdings lines added 30 Sept ("you're holding 1 Gilded d'hide
-        // vambraces, +254,063 over cost") therefore looked exactly like "your sell is below
+        // drew amber -- and the holdings lines added 30 Sept ("you're holding 1 of an item, so much
+        // over cost") therefore looked exactly like "your sell is below
         // break-even". A plain statement of what you own must not wear a warning's colour.
         //
         // The theme's text colour rather than a literal white: that is near-white under RuneLite's
@@ -562,8 +834,26 @@ final class EviLivePanel extends PluginPanel {
         card.setBorder(new CompoundBorder(
           BorderFactory.createMatteBorder(0, 3, 0, 0, edge),
           BorderFactory.createEmptyBorder(6, 8, 6, 8)));
-        // The full sentence, one hover away. It is the same text the scanner shows.
-        card.setToolTipText(c.message);
+        // The full sentence, one hover away. It is the same text the scanner shows. A note that comes as a short line AND a
+        // detail (8 Oct 2026, the maintainer: crash notes, whose one sentence was too long to read as a single tooltip line) shows its
+        // line ON the card, under the figures, and keeps the detail for the tooltip; any other note is exactly as before.
+        boolean split = c.detail != null && !c.detail.isEmpty() && c.message != null && !c.message.isEmpty();
+        String cardTip = split ? c.detail : c.message;
+        tip(card, cardTip);
+        // A HOLDING line naming its lot (8 Oct 2026): a click, left or right, opens Personal use / I don't have this anymore
+        // for that lot -- the card's two buttons, for stock that is not the card. The line looks exactly as before; only the
+        // tooltip says it can be clicked. Not on any other line: an offer, a crash note or a hint is not a position.
+        if (c.buyId != null) {
+          tip(card, (c.message == null || c.message.isEmpty() ? "" : c.message + " ") + LINE_MENU_HINT);
+          card.putClientProperty(HOLDING_LINE, c);
+          final JPanel line = card;
+          // mouseClicked, not mousePressed: opened on the press, the release could land on the first item and choose it.
+          card.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+              if (line.isShowing()) holdingMenu(c).show(line, e.getX(), e.getY());
+            }
+          });
+        }
 
         JLabel name = new JLabel(c.name == null ? "" : c.name);
         name.setFont(FontManager.getRunescapeSmallFont());
@@ -584,22 +874,21 @@ final class EviLivePanel extends PluginPanel {
           figures.setAlignmentX(Component.LEFT_ALIGNMENT);
           card.add(figures);
         }
+        if (split) {
+          // Wrapped, read-only, caret pinned (bodyText); the theme's own text colour, never green. It carries the card's
+          // tooltip too: a text area takes the mouse, so without it hovering the line would show nothing.
+          JTextArea line = bodyText(c.message);
+          line.setForeground(p.text);
+          line.setBorder(BorderFactory.createEmptyBorder(3, 0, 0, 0));
+          tip(line, cardTip);
+          line.putClientProperty(CARD_LINE, Boolean.TRUE);
+          card.add(line);
+        }
         adviceList.add(Box.createVerticalStrut(6));
         adviceList.add(card);
       }
       adviceList.revalidate();
       adviceList.repaint();
-    });
-  }
-
-  /** Hides the pairing fields once a key is saved, and brings them back if it is ever cleared. The
-   *  sidebar is 225px wide and setup that is finished is the cheapest thing on it to give up. */
-  void paired(boolean paired) {
-    SwingUtilities.invokeLater(() -> {
-      if (pairingSection.isVisible() == !paired) return;
-      pairingSection.setVisible(!paired);
-      pairingSection.revalidate();
-      pairingSection.repaint();
     });
   }
 
@@ -613,8 +902,8 @@ final class EviLivePanel extends PluginPanel {
   /** The suggestion as a card rather than a paragraph.
    *
    *  The sidebar used to state a number and bury whether EVI trusted it. On 28 September 2026 a player
-   *  bought a batch of Contract of Glyphic Attenuation expecting roughly the 3m gp the quoted spread implied; it
-   *  was worth about 350,000, and EVI knew -- it had demoted the pick and said so, in the middle of a
+   *  bought a batch of an item expecting the profit the quoted spread implied; it
+   *  was worth about a tenth of that, and EVI knew -- it had demoted the pick and said so, in the middle of a
    *  paragraph. The figure was visible and the doubt was not.
    *
    *  So the doubt gets a shape: a coloured edge, a few words of verdict, the headline profit, and the
@@ -625,7 +914,10 @@ final class EviLivePanel extends PluginPanel {
     SwingUtilities.invokeLater(() -> {
       if (s == null || s.verdict == null || s.verdict.checks == null || s.verdict.checks.isEmpty()) {
         showProse();
-        setIfChanged(suggestion, prose == null || prose.isEmpty() ? "No suggestion yet." : prose);
+        String total = totalCost(s);
+        boolean any = prose != null && !prose.isEmpty();
+        // A buy drawn as a paragraph still states its total, on its own last line.
+        setIfChanged(suggestion, !any ? "No suggestion yet." : total == null ? prose : prose + "\n" + total);
         return;
       }
       // The poll re-sends the same pick every two seconds. Rebuilding the card each time would relayout
@@ -637,6 +929,24 @@ final class EviLivePanel extends PluginPanel {
       suggestionCard.revalidate();
       suggestionCard.repaint();
     });
+  }
+
+  /**
+   * "Total 1,396,000 gp": what a BUY costs in full, buy price times quantity (the maintainer's decision, 6 Oct 2026,
+   * in place of a share of cash). Null -- show nothing -- for a sell or holding, when the quantity or the price is
+   * not known (zero or less), and when the product does not fit a long: never a wrapped or guessed figure. long
+   * arithmetic throughout (a unit price can pass max cash), and en-US grouping whatever the machine's locale, so
+   * a Dutch client prints 1,396,000 and not 1.396.000.
+   */
+  static String totalCost(Suggestion s) {
+    if (s == null || !"buy".equals(s.action) || s.quantity <= 0 || s.buyPrice <= 0) return null;
+    long total;
+    try {
+      total = Math.multiplyExact((long) s.quantity, s.buyPrice);
+    } catch (ArithmeticException e) {
+      return null;
+    }
+    return String.format(Locale.US, "Total %,d gp", total);
   }
 
   private static String cardSignature(Suggestion s) {
@@ -712,6 +1022,17 @@ final class EviLivePanel extends PluginPanel {
     suggestionCard.add(Box.createVerticalStrut(2));
     suggestionCard.add(prices);
 
+    // What the buy costs in full (the maintainer's decision, 6 Oct 2026: the total, always, not a share of cash).
+    String total = totalCost(s);
+    if (total != null) {
+      JLabel cost = new JLabel(total);
+      cost.setFont(FontManager.getRunescapeSmallFont());
+      cost.setForeground(p.muted);
+      cost.setAlignmentX(Component.LEFT_ALIGNMENT);
+      suggestionCard.add(Box.createVerticalStrut(2));
+      suggestionCard.add(cost);
+    }
+
     suggestionCard.add(Box.createVerticalStrut(5));
     for (Suggestion.Check c : s.verdict.checks) {
       if (c == null || c.text == null) continue;
@@ -757,6 +1078,7 @@ final class EviLivePanel extends PluginPanel {
     SwingUtilities.invokeLater(() -> {
       EviTheme.use(theme);
       paintTree(this);
+      paintRisk(shownRisk); // the outline colours belong to the palette, so they are redrawn too
       if (suggestionCard != null) suggestionCard.setBorder(suggestionBorder(warned ? EviTheme.palette().warn : EviTheme.palette().accent));
       revalidate();
       repaint();
@@ -810,14 +1132,14 @@ final class EviLivePanel extends PluginPanel {
   }
 
   /** Replaces the Active offers list with one row per occupied GE slot. Safe from any thread. */
-  /** The bridge's realised-profit figure, or null when it could not be read this poll. EDT only. */
+  /** The journal's realised-profit figure, or null when the answer carried none this poll. EDT only. */
   void profit(EviLivePlugin.Profit p) {
     SwingUtilities.invokeLater(() -> {
       if (p == null) {
         profitFigure.setText(" ");
         role(profitFigure, "text");
         profitFigure.setForeground(EviTheme.palette().text);
-        setIfChanged(profitLine, "Profit unavailable -- the bridge did not answer.");
+        setIfChanged(profitLine, "Profit unavailable just now.");
         return;
       }
       // Green up, red down, plain at nothing. Zero is deliberately NOT green: a player who has made
@@ -954,6 +1276,42 @@ final class EviLivePanel extends PluginPanel {
     return label;
   }
 
+  /** Every sidebar tooltip goes through here (8 Oct 2026, the maintainer: a crash alert's tooltip was one line wider than the screen).
+   *  A tooltip longer than {@link #TIP_PLAIN_MAX} characters is drawn as HTML at a fixed {@link #TIP_WIDTH} px, so Swing wraps
+   *  it into a few short lines; a short one stays plain text. The text is escaped, so nothing in it is read as markup. */
+  static void tip(JComponent c, String text) {
+    c.setToolTipText(wrapTip(text));
+  }
+
+  static final int TIP_WIDTH = 300;
+  static final int TIP_PLAIN_MAX = 60;
+  private static final String TIP_OPEN = "<html><body style='width:" + TIP_WIDTH + "px'>";
+  private static final String TIP_CLOSE = "</body></html>";
+  /** The client property on an advice card's own line (a split note's short message). Package-private for the tests. */
+  static final String CARD_LINE = "eviCardLine";
+
+  /** The tooltip form of {@code text}: unchanged when null, empty or short; otherwise escaped and width-wrapped HTML. */
+  static String wrapTip(String text) {
+    if (text == null || text.length() <= TIP_PLAIN_MAX) return text;
+    StringBuilder sb = new StringBuilder(text.length() + 48).append(TIP_OPEN);
+    for (int i = 0; i < text.length(); i++) {
+      char ch = text.charAt(i);
+      if (ch == '&') sb.append("&amp;");
+      else if (ch == '<') sb.append("&lt;");
+      else if (ch == '>') sb.append("&gt;");
+      else if (ch == '\n') sb.append("<br>");
+      else sb.append(ch);
+    }
+    return sb.append(TIP_CLOSE).toString();
+  }
+
+  /** The text a tooltip shows, with {@link #wrapTip}'s wrapping undone: what the tests compare. */
+  static String plainTip(String tip) {
+    if (tip == null || !tip.startsWith(TIP_OPEN) || !tip.endsWith(TIP_CLOSE)) return tip;
+    return tip.substring(TIP_OPEN.length(), tip.length() - TIP_CLOSE.length())
+      .replace("<br>", "\n").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+  }
+
   private static JTextArea bodyText(String value) {
     JTextArea field = new JTextArea(value);
     // A JTextArea's default caret follows every setText to the end of the new text and then scrolls
@@ -980,14 +1338,6 @@ final class EviLivePanel extends PluginPanel {
     button.setFont(FontManager.getRunescapeSmallFont());
     role(button, "button");
     button.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-    return button;
-  }
-
-  /** The pairing save button, EVI's one primary/committing action in this panel -- outlined in the
-   *  brand color so it stands out from the plain secondary button below. */
-  private static JButton primaryButton(String text) {
-    JButton button = flatButton(text);
-    role(button, "primary");
     return button;
   }
 

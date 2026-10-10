@@ -11,7 +11,7 @@ package com.evi.live;
  *
  * The cost is not hypothetical. Replaying 90 days in September found the personal ranking at
  * Medium risk did no better than picking an eligible item at random, because a single lucky flip
- * could carry an item into first place for weeks (see the 2026-09-18 entry in README.md). On
+ * could carry an item into first place for weeks (the project notes, 18 Sept 2026). On
  * 26 Sept a one-flip history put an Uncharged toxic trident (e) ahead of everything else at a
  * quoted 1,300,613 gp, while buyers were in fact paying a price that made it worth about 64,559.
  *

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The test tasks' logging (build.gradle points every JavaExec task but `run` here): the console only. RuneLite's own
+     logback.xml, on the test classpath, would append every test run to the real ~/.runelite/logs/client.log, which caused a
+     false diagnosis on 8 Oct 2026. The dev client (`gradlew run`) keeps RuneLite's configuration and its client.log. -->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <Pattern>%d{yyyy-MM-dd HH:mm:ss zzz} [%thread] %-5level %logger{36} - %msg%n</Pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

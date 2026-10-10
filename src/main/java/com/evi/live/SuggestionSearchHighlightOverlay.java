@@ -21,8 +21,8 @@ import net.runelite.api.Client;
  * highlight, read directly from its published source.
  *
  * An earlier version of this class also painted an "EVI suggests: <name>" label of its own near
- * the offer-setup panel, through several repositioning attempts (see UPDATE-NOTES.md's dated
- * entries) that never quite landed reliably -- that display-only row was removed entirely.
+ * the offer-setup panel, through several repositioning attempts (recorded in the project's dated
+ * update notes) that never quite landed reliably -- that display-only row was removed entirely.
  * SuggestionItemSelectWidget now covers that same job properly instead: a real, clickable widget
  * placed inside the GE's own item-search results list (matching where Flipping Copilot's own
  * "Copilot item: <icon> <name>" row actually lives and behaves, confirmed against its published

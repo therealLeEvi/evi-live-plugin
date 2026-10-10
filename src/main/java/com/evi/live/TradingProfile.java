@@ -1,12 +1,16 @@
 package com.evi.live;
 
 /**
- * Which kind of market-wide suggestions EVI should look for, as a plugin config dropdown. Sent to
- * the bridge as ?profile=starter on GET /api/suggestion; STANDARD is left off the query string
- * entirely, so it behaves exactly as before this existed.
+ * RETIRED 6 Oct 2026. This was the "Trading profile" dropdown; it is now a hidden config item that
+ * nothing reads, and the plugin never sends ?profile= at all. The enum stays only so a stored value
+ * (most installs hold "STARTER", the old default) is still a valid value for RuneLite to load --
+ * deleting the type under the same keyName is the config-loader risk the project notes warn about.
+ *
+ * Why it went: on market-wide picks, untaxed-only meant sub-50 gp bulk and nothing else. The
+ * measurement below is kept as the record of why it was once the default.
  *
  * STARTER is training wheels, and it was chosen from measured evidence rather than intuition.
- * Replaying 90 archived days through EVI's own ranking (tools/backtest.mjs), restricting market-wide
+ * Replaying 90 archived days through EVI's own ranking, restricting market-wide
  * picks to items the Grand Exchange charges no tax on -- anything under 50 gp, plus the exemption
  * list -- changed the results dramatically for a small stack:
  *
@@ -23,7 +27,7 @@ package com.evi.live;
  * tax-free items are cheap items, so profit per trade is small: this is a way to learn the mechanics
  * and grow steadily, not a way to make a fortune quickly.
  */
-// STARTER is the default: someone installing this for the first time is more likely to be learning
+// (Historical) STARTER was the default: someone installing this for the first time is more likely to be learning
 // than to be running a large stack, and the measured downside of starting here is smaller profit per
 // trade rather than risk. Anyone who isn't a beginner switches to Standard in one click.
 public enum TradingProfile {
@@ -32,10 +36,5 @@ public enum TradingProfile {
   /** RuneLite's config UI renders enum dropdowns using toString(), so this is the visible label. */
   @Override public String toString() {
     return this == STARTER ? "Starter" : "Standard";
-  }
-
-  /** Value to send as ?profile=, or null for STANDARD (meaning: leave the parameter off entirely). */
-  String param() {
-    return this == STARTER ? "starter" : null;
   }
 }

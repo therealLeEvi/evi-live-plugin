@@ -173,20 +173,20 @@ public class EviLiveHintTest {
     String shownOpenItem = fc.chatboxContainer.createdChildren.get(0).text;
     check(shownOpenItem.contains("210") && shownOpenItem.toLowerCase().contains("buy"), "Open-item fallback must show its buy price when there's no ranked suggestion for this item: " + shownOpenItem);
 
-    // The reported loss: a held Eclipse Moon chestplate (broken) sold through this fallback, which
-    // never knew what the player paid, so the prompt offered 595,350 -- their own buy price -- with
-    // no warning, and the sale lost exactly the tax. Parsed exactly as the bridge now sends it (see
+    // The reported loss: a held item sold through this fallback, which never knew what the player
+    // paid, so the prompt offered their own buy price with no warning, and the sale lost exactly the
+    // tax. (The figures below are invented; the shape is the report's.) Parsed exactly as the bridge now sends it (see
     // withCostBasis in bridge/suggestions.mjs).
     fc.offerCreationType = 1;
     fc.offerContainer.children.get(20).text = "Sell offer";
     openItemPriceCache.set(new com.google.gson.Gson().fromJson(
-      "{\"itemId\":999,\"buyPrice\":595350,\"sellPrice\":595350,\"action\":\"sell\",\"breakEvenPrice\":607499,\"lossIfSoldNow\":11907}", Suggestion.class));
+      "{\"itemId\":999,\"buyPrice\":400000,\"sellPrice\":400000,\"action\":\"sell\",\"breakEvenPrice\":408163,\"lossIfSoldNow\":8000}", Suggestion.class));
     hint.update();
     String shownHeldLoss = fc.chatboxContainer.createdChildren.get(0).text;
-    check(shownHeldLoss.contains("LOSS") && shownHeldLoss.contains(String.format("%,d", 607499)), "Selling a held item below its break-even through the open-item fallback must warn with the break-even: " + shownHeldLoss);
-    check(shownHeldLoss.contains(String.format("%,d", 595350)), "A warning, never a block: the price is still offered: " + shownHeldLoss);
+    check(shownHeldLoss.contains("LOSS") && shownHeldLoss.contains(String.format("%,d", 408163)), "Selling a held item below its break-even through the open-item fallback must warn with the break-even: " + shownHeldLoss);
+    check(shownHeldLoss.contains(String.format("%,d", 400000)), "A warning, never a block: the price is still offered: " + shownHeldLoss);
     // And the same fallback with no cost basis (an item the player does not hold) stays silent.
-    openItemPriceCache.set(EviLiveSuggestionTest.openItemPrice(999, 595350, 595350));
+    openItemPriceCache.set(EviLiveSuggestionTest.openItemPrice(999, 400000, 400000));
     hint.update();
     check(!fc.chatboxContainer.createdChildren.get(0).text.contains("LOSS"), "With no known cost there is nothing to warn about, and nothing is guessed");
     fc.offerCreationType = 0;

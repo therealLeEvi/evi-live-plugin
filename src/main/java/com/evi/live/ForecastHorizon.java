@@ -1,36 +1,27 @@
 package com.evi.live;
 
 /**
- * How far ahead, if at all, the bridge should run a price-direction forecast (the same
- * momentum/volume model the scanner's own Predict button uses, see bridge/suggestions.mjs's
- * forecastForItem) before returning a "buy" suggestion. Sent to the bridge as ?forecast=1h|6h|
- * overnight on GET /api/suggestion; OFF (the default) is left off the query string entirely, so an
- * untouched config sends no forecast request and suggestions look exactly as before this existed --
- * no extra Wiki API call, no change to reasoning text. Deliberately separate from
- * EviLiveConfig.tradeDuration(), which only judges whether a trade can realistically fill within a
- * short window (minutes) from recent volume; this instead asks "which way is the price likely to
- * move over roughly this long," matching the scanner's own three horizons (1h/6h/overnight).
+ * The "Exit-risk check" setting (keyName exitRiskCheck since 4.0.0): whether the engine runs its fill-outlook forecast before
+ * a "buy" suggestion. Sent as ?forecast=6h; OFF (the default) is left off the query entirely, so an untouched config asks for
+ * no forecast and suggestions look exactly as before -- no extra archive read, no change to reasoning text.
+ *
+ * <p>~6 hours is the only horizon: the plugin's price archive is hourly and the fill-outlook table was measured for that
+ * window. The old ~1 hour and Overnight options were removed in 4.0.0 (they gave no forecast in the self-contained engine)
+ * together with the old keyName, so no stored value names a constant that no longer exists.
+ *
+ * <p>Public, like every enum a config item returns: RuneLite's config proxy cannot reach a package-private one. Stored by name,
+ * so the names are the stored values and must not change.
  */
 public enum ForecastHorizon {
-  OFF, ONE_HOUR, SIX_HOUR, OVERNIGHT;
+  OFF, SIX_HOUR;
 
   /** RuneLite's config UI renders enum dropdowns using toString(), so this is the visible label. */
   @Override public String toString() {
-    switch (this) {
-      case ONE_HOUR: return "~1 hour";
-      case SIX_HOUR: return "~6 hours";
-      case OVERNIGHT: return "Overnight";
-      default: return "Off";
-    }
+    return this == SIX_HOUR ? "~6 hours" : "Off";
   }
 
-  /** The exact ?forecast= value the bridge expects, or null for OFF (meaning: omit the parameter). */
+  /** The exact ?forecast= value the engine expects, or null for OFF (meaning: omit the parameter). */
   String param() {
-    switch (this) {
-      case ONE_HOUR: return "1h";
-      case SIX_HOUR: return "6h";
-      case OVERNIGHT: return "overnight";
-      default: return null;
-    }
+    return this == SIX_HOUR ? "6h" : null;
   }
 }

@@ -1,13 +1,20 @@
 package com.evi.live;
 
+import com.evi.live.inprocess.EngineFeed;
+import com.evi.live.inprocess.InProcessEngine;
+import com.evi.live.inprocess.SuggestionRecords;
+import com.evi.live.journal.AccountIds;
+import com.evi.live.journal.PluginFolder;
+import com.evi.live.journal.PluginJournal;
+import com.evi.live.market.PriceDataService;
+import com.evi.live.market.WikiPriceClient;
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.inject.Provides;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -18,6 +25,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +36,7 @@ import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
+import net.runelite.client.Notifier;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -42,10 +51,13 @@ import javax.swing.SwingUtilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions. */
-@PluginDescriptor(name="EVI Live (Local)",internalName="evi-live",description="Passively sends GE snapshots to your local EVI bridge; shows your own suggested quantity/price in the offer prompt and fills it on an optional hotkey",tags={"grand exchange","evi","hotkey","suggestion"})
+/** Observes GE state; shows your own EVI suggestion as a text hint in the open quantity/price prompt and, on an optional hotkey, fills that one field with it. No menus, clicks, item selection, offer confirmation or other automated actions.
+ *  Self-contained since 4.0.0: the engine, the trade journal and the price archive all run inside the plugin, and its only
+ *  network traffic is the OSRS Wiki's public prices (com.evi.live.market.WikiPriceClient). */
+@PluginDescriptor(name="EVI Live",internalName="evi-flipping",description="Flip suggestions for the Grand Exchange: what to buy, how many and at what price, plus a trade journal with exact GE tax. Uses only public OSRS Wiki prices; nothing about you is sent.",tags={"grand exchange","ge","flip","flipping","trading","money making","profit","suggestions","journal","evi"})
 public class EviLivePlugin extends Plugin {
   private static final Logger log=LoggerFactory.getLogger(EviLivePlugin.class);
+  @Inject private Notifier notifier;
   @Inject private Client client;
   @Inject private ConfigManager configManager;
   @Inject private ClientToolbar toolbar;
@@ -61,20 +73,74 @@ public class EviLivePlugin extends Plugin {
   @Inject private EviLiveConfig config;
   private EviLivePanel panel;
   private NavigationButton navigation;
-  private Filepath pairingPath;
   private volatile boolean running;
   private volatile long lifecycle;
-  private long pairingRevision;
   @Inject private Gson gson;
-  private final ArrayDeque<String> queue=new ArrayDeque<>();
-  // RuneLite's own shared HTTP client, injected rather than built here, so every request this
-  // plugin makes goes through the client the user's installation already governs. Assigned to
-  // transport in startUp() (not at field-initialisation time) because injection hasn't happened
-  // yet when fields are initialised; tests replace transport directly and never see this.
+  // RuneLite's own shared HTTP client, injected rather than built here, so every request this plugin makes -- only ever to the
+  // OSRS Wiki's public prices, through WikiPriceClient -- goes through the client the player's installation already governs.
   @Inject private okhttp3.OkHttpClient okHttpClient;
-  private LocalTransport transport;
   private ScheduledExecutorService sender;
-  private volatile String pluginKey;
+  // The plugin's OWN trade journal: every packet the plugin builds from the GE slots, recorded and persisted in its data folder.
+  // It owns its own thread (evi-journal) for every file and store operation; this class only hands text over. Volatile: set
+  // in startUp/shutDown, read on the client thread (enqueue) and the poll thread.
+  private volatile PluginJournal journal;
+  // The journal shutDown() stopped, which may still be finishing its queue: the next startUp() hands it to
+  // the new journal, whose OWN thread waits for it (bounded) before reading anything, so a quick off/on
+  // never has two journals writing one file at once and no queued packet is lost or reordered.
+  private volatile PluginJournal retiredJournal;
+  // The price-data layer: the OSRS Wiki's public prices and a rolling hourly archive in the plugin's own data folder, on its
+  // own thread (evi-prices). The engine reads it. Volatile: set in startUp/shutDown, read on the client thread.
+  private volatile PriceDataService prices;
+  // The price layer shutDown() stopped, which may still have a Wiki request out (shutdown never interrupts it). The next
+  // startUp() hands it to the new layer, which reads and fetches NOTHING until it has finished and then keeps its
+  // spacing, so turning the plugin off and on never puts two Wiki requests in flight or two closer than 2.5 s.
+  private volatile PriceDataService retiredPrices;
+  // The plugin's own engine (its own thread, evi-engine) and the source the poll asks it through (an InProcessTransport over
+  // that engine; a test may install a recorded one). Null until startInProcess built them, or when the engine did not start.
+  private volatile InProcessEngine inProcess;
+  private volatile AnswerSource answers;
+  // The profit line's reset time: epoch ms, null for never. Stored under its own keyName in the plugin's config group, read
+  // at startUp; the engine's thread reads this field.
+  private volatile Long inProcessProfitSince;
+  // "I took this one" -- the suggestion ids the engine issues and the presses (see SuggestionRecords), in the plugin's data
+  // folder. Built in startInProcess.
+  private volatile SuggestionRecords suggestionRecords;
+  // The Block button's lists, PER CHARACTER (the maintainer's decision, 8 Oct 2026): each kept on its own RuneScape profile
+  // under the plugin's group (see BlockedItems), addressed by the profile NAMED in each call, never by whichever profile is
+  // current. Not final so a test can supply its own store.
+  private BlockedItems blockedItems=new BlockedItems(new BlockedItems.Store(){
+    public String read(String profile){ConfigManager cm=configManager;return cm==null?null:cm.getConfiguration(CONFIG_GROUP,profile,BlockedItems.CONFIG_KEY);}
+    public void write(String profile,String value){
+      ConfigManager cm=configManager;
+      if(cm==null)throw new IllegalStateException("no config manager");
+      if(value.isEmpty())cm.unsetConfiguration(CONFIG_GROUP,profile,BlockedItems.CONFIG_KEY);
+      else cm.setConfiguration(CONFIG_GROUP,profile,BlockedItems.CONFIG_KEY,value);
+    }
+  });
+  // Which RuneScape profile each account pseudonym this plugin lifetime has seen belongs to (account -> profile key). The engine
+  // is asked about an ACCOUNT; a Block list lives on a PROFILE; this joins the two without reading the current profile on the
+  // engine's thread. Filled where the account is worked out (onGameTick); never cleared, so a poll answered just after a
+  // character switch still reads the list of the account it was asked for.
+  private final Map<String,String> accountProfiles=new ConcurrentHashMap<>();
+  // The RuneScape profile of the LAST character worked out at a login (the maintainer's decision, 8 Oct 2026), so a query that
+  // names no account (the login screen, the first ticks of a login, after a logout) still reads that character's Block list
+  // instead of none. Kept in the config under LAST_PROFILE_KEY, so it survives a client restart; read at startInProcess,
+  // written at login. Null: no character ever logged in (no list applies).
+  private volatile String lastProfile;
+  // The plugin's data folder, kept by startInProcess for the one-time import of the old companion app's preferences.
+  private volatile Filepath inProcessDir;
+  // RuneScape profiles whose import/preferences.json could not be read, so the log says so once per session, not every poll.
+  private final Set<String> preferencesImportLogged=ConcurrentHashMap.newKeySet();
+  /** The config key the in-process profit reset is stored under (a new keyName, no @ConfigItem: nothing to show in settings). */
+  static final String PROFIT_SINCE_KEY="inProcessProfitSince";
+  /** The config key holding the last logged-in character's RuneScape profile key (a new keyName, no @ConfigItem). */
+  static final String LAST_PROFILE_KEY="lastCharacterProfile";
+  /** The status line before the engine's first answer (the name is from the build that still had a bridge mode). */
+  static final String IN_PROCESS_WAITING="Waiting for prices from the OSRS Wiki.";
+  /** The suggestion card while buys wait for the price history and nothing else applies. ASCII. */
+  static final String BUYS_PAUSED="Buy suggestions are paused while EVI loads price history (progress below).";
+  /** How long a helper thread (never the client thread) waits for the sender after shutDown before logging that it is still busy. */
+  static final long SENDER_STOP_WAIT_MS=10_000;
   private String salt,profile,account,session,economy;
   private long seq;
   private int warmTicks,ticks;
@@ -91,7 +157,46 @@ public class EviLivePlugin extends Plugin {
   // (collected) with no separate bookkeeping. This is what stops the same item being suggested
   // again right after you've already acted on it -- the sidebar previously had no way to know an
   // offer had been placed.
+  //
+  // 6 Oct 2026: the Skip BUTTON no longer lands here. It goes to skipMemory below, which keeps it for
+  // four hours per RuneScape account and survives reset(). This set now holds only the session-long
+  // exclusions the other buttons add for immediacy (Block, Personal use, Gone -- each also recorded
+  // by the plugin for good), plus a Skip pressed while no account is known, so that press still applies.
   private final Set<Integer> skippedItemIds=ConcurrentHashMap.newKeySet();
+  /** The config group every EviLiveConfig item lives in. */
+  static final String CONFIG_GROUP="evilive";
+  /** The keyName the sidebar's risk buttons write -- the SAME key as the settings panel's Risk level
+   *  (EviLiveConfig.riskLevelV2), so the two can never disagree. */
+  static final String RISK_KEY="riskLevelV2";
+  /** "Max share of cash per trade" (EviLiveConfig.maxTradeShare): with High it decides the line under the risk buttons. */
+  static final String SHARE_KEY="maxTradeShare";
+  /** Whether the risk levels reach the request at all. RiskLevel.SHOWN, the one switch, and false since 7 Oct 2026:
+   *  while false NO risk= is ever sent, whatever riskLevelV2 holds, so every player is asked at Low -- the bridge's own
+   *  default -- exactly as a default player always was. A field rather than the bare constant only so a test can
+   *  still drive the dormant path; nothing in the plugin writes it. */
+  private boolean riskLevelsShown=RiskLevel.SHOWN;
+  // Skips, per account, for four hours (see SkipMemory). Backed by RuneLite's per-account RS-profile
+  // configuration; read lazily, so a plugin built without injection (the tests) simply has no profile
+  // and falls back to the session set above. Not final so a test can supply its own store and clock.
+  private SkipMemory skipMemory=new SkipMemory(new SkipMemory.Store(){
+    public String profileKey(){ConfigManager cm=configManager;return cm==null?null:cm.getRSProfileKey();}
+    // Both guard on the profile STILL being current: RuneLite's RS-profile calls always address the
+    // current account, so a profile that changed between lookup and use must read and write nothing.
+    public String read(String profile){
+      ConfigManager cm=configManager;
+      if(cm==null || !profile.equals(cm.getRSProfileKey()))return null;
+      return cm.getRSProfileConfiguration(CONFIG_GROUP,SkipMemory.CONFIG_KEY);
+    }
+    public void write(String profile,String value){
+      ConfigManager cm=configManager;
+      if(cm==null || !profile.equals(cm.getRSProfileKey()))return;
+      if(value.isEmpty())cm.unsetRSProfileConfiguration(CONFIG_GROUP,SkipMemory.CONFIG_KEY);
+      else cm.setRSProfileConfiguration(CONFIG_GROUP,SkipMemory.CONFIG_KEY,value);
+    }
+  },System::currentTimeMillis);
+  // How a config value is written: (keyName, stored value). Null means ConfigManager, which is the
+  // only production path; a test sets this to observe exactly which key and value a press writes.
+  private java.util.function.BiConsumer<String,String> configWriter;
   // unverifiableItemIds: a reconstructed holding the bridge offered that was NOT in the inventory
   // when we looked. Held back only until the inventory next changes, never for the session.
   //
@@ -99,9 +204,8 @@ public class EviLivePlugin extends Plugin {
   // that was wrong in a way that reached every user: a buy that has FILLED but not yet been
   // COLLECTED is not in the inventory, so a poll landing in that window excluded the item until
   // RuneLite was restarted. Collecting it changed nothing, because EVI never asked again. A player hit
-  // this twice -- a Dagon'hai hat on 29 Sept and 1 Gilded d'hide vambraces on 30 Sept, where the
-  // bridge was answering "sell 1 Gilded d'hide vambraces ... +254,063" the whole time and the
-  // plugin was dropping it on the floor. A transient condition must not cause a permanent exclusion,
+  // this twice, on 29 and 30 Sept, while the bridge was answering "sell 1 ..." with a profit the
+  // whole time and the plugin was dropping it on the floor. A transient condition must not cause a permanent exclusion,
   // and this one was invisible as well as permanent: the early return below skipped the line that
   // updates the skipped count, so "Show skipped items again" never even appeared.
   private final Set<Integer> unverifiableItemIds=ConcurrentHashMap.newKeySet();
@@ -134,31 +238,11 @@ public class EviLivePlugin extends Plugin {
   // and filters nothing -- the same fail-open rule as cashStack and membersWorld above.
   // Whether the player is standing in an instance. Client-thread write, poll-thread read, hence
   // volatile -- see refreshInInstance for why this is not read inline.
-  // Set when the bridge ANSWERS with a 401. A saved key that the bridge refuses is not a pairing,
-  // and the panel must stop pretending it is -- see refreshPairingVisibility.
-  private volatile boolean keyRejected;
-  // What the companion app reports it speaks (GET /api/version), or -1 while unknown. Compared
-  // against EXPECTED_BRIDGE_API below.
-  private volatile int bridgeApi=-1;
+  // Warnings already announced, so one standing offer does not notify every two seconds.
+  private final java.util.Set<String> announcedAdvice=new java.util.HashSet<>();
   private volatile boolean inInstance;
-  // Acceptances the player has pressed but the bridge has not confirmed yet. See acceptSuggestion.
+  // Acceptances the player has pressed but the engine's answer does not show yet. See acceptSuggestion.
   private final java.util.Map<String,Boolean> pendingAccept=new java.util.concurrent.ConcurrentHashMap<>();
-  // The bridge API this build of the plugin was written against. Raise it in step with BRIDGE_API in
-  // bridge/server.mjs whenever a bridge release adds something a player would want.
-  //
-  // WHY THIS EXISTS. The plugin updates itself through the Plugin Hub; the companion app is a zip
-  // somebody downloaded once, and nothing has ever told them a newer one exists. On 1 Oct 2026 three
-  // people were running a bridge from the previous day and would have kept running it indefinitely,
-  // missing every fix since. The old bridge cannot announce its own age -- it does not know a newer
-  // one was released -- so the half that updates automatically has to be the one that says so.
-  //
-  // Deliberately NOT a failure. An older bridge works; it simply does less. The message says the app
-  // is behind, never that anything is broken, and nothing is withheld because of it.
-  // 3 as of 1 Oct 2026: the stale-support cap, which stops a headline profit being quoted at a price
-  // buyers have stopped paying. Raised BEFORE 3.11.0 shipped rather than waiting for a later release
-  // -- the plugin is the slow half, and a bridge-only fix can only be announced by a plugin, so the
-  // chance to tell people was now or indefinitely later.
-  static final int EXPECTED_BRIDGE_API=5;
   private volatile int freeSlots=-1;
   private volatile int collectableSlots=-1;
   // The items the bridge's journal believes are still held (positionItems in its last response). The
@@ -227,8 +311,8 @@ public class EviLivePlugin extends Plugin {
   // Items bought and collected through the GE this session that haven't been resold yet -- so
   // EVI can remind you to close out a position you already opened (sell price shown again)
   // instead of moving straight on to a brand-new buy suggestion for something else, which was the
-  // exact complaint: buying steel cannonballs from a suggestion, then having the sidebar jump
-  // straight to a totally different market-wide pick while the cannonballs just sat there unsold.
+  // exact complaint a player made: buying a stack from a suggestion, then having the sidebar jump
+  // straight to a totally different market-wide pick while the stack just sat there unsold.
   // Session-only, like everything else in this block: populated purely from observed GE slot
   // transitions (never assumed), keyed by item ID so re-buying the same item just refreshes its
   // held quantity rather than creating a second entry. ConcurrentHashMap because
@@ -262,90 +346,245 @@ public class EviLivePlugin extends Plugin {
     // Plugin Hub maintainer corrected that on runelite/plugin-hub#16640 ("you shouldn't be using
     // unchecked, ever"), and it is indeed present in the client this builds against. Nothing here
     // reads the old .runelite/evi-live/ folder any more: legacyDataDirectory is deliberately NOT set,
-    // per the same review, since only this developer's own machine ever had that folder.
-    // Built here rather than at field initialisation because okHttpClient is only injected by the
-    // time startUp() runs. A test that installed its own transport keeps it.
-    if(transport==null)transport=new LocalTransport.Http(okHttpClient);
+    // per the same review, since only the maintainer's own machine ever had that folder.
+    // 4.0.0: the internalName is evi-flipping, so the folder is plugin-data/evi-flipping/ (PluginFolder); nothing reads the
+    // plugin-data/evi-live/ folder of earlier versions either.
     Filepath dir=getPluginDirectory();
     dir.createDirectories();
-    pairingPath=dir.joinSegment("plugin-key.txt");
-    pluginKey=null;
-    String pairingStatus="Not paired. Paste your RuneLite plugin key below.";
-    try {
-      if(pairingPath.exists())pluginKey=PairingKey.normalize(readTrimmed(pairingPath));
-      if(pluginKey!=null)pairingStatus="Paired locally. Log in to begin observing offers.";
-    } catch(Exception ex){pairingStatus="The saved pairing key is empty, invalid, or unreadable. Paste a new key below.";}
     Filepath saltFile=dir.joinSegment("identity-salt.txt");
     if(!saltFile.exists())saltFile.write(UUID.randomUUID().toString());
     salt=readTrimmed(saltFile);
     if(salt.isEmpty())throw new IllegalStateException("EVI identity salt is empty; restore it from your local backup.");
     Runnable createPanel=()->{
-      panel=new EviLivePanel(this::pair,this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit,this::clearSkips,this::acceptSuggestion);
-      panel.applyTheme(config.panelTheme());
-      panel.actions(false,false,false,false,false);
+      panel=buildPanel();
       navigation=NavigationButton.builder().tooltip("EVI Live").icon(EviLivePanel.icon()).panel(panel).priority(8).build();
       toolbar.addNavigation(navigation);
     };
     if(SwingUtilities.isEventDispatchThread())createPanel.run();else SwingUtilities.invokeAndWait(createPanel);
-    status(pairingStatus);
-    refreshPairingVisibility();
+    status(IN_PROCESS_WAITING);
+    if(panel!=null)panel.profitWaiting("Waiting for the first price check.");
     reset();
     suggestionKeybindHandler.register();
     overlayManager.add(searchHighlightOverlay);
+    startJournal(dir);
+    startPrices(dir);
+    startInProcess(dir);
     final long generation=++lifecycle;
     running=true;
-    sender=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"evi-local-sender");t.setDaemon(true);return t;});
-    sender.scheduleWithFixedDelay(()->flush(generation),0,1,TimeUnit.SECONDS);
+    sender=Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"evi-poll");t.setDaemon(true);return t;});
     sender.scheduleWithFixedDelay(()->pollSuggestion(generation),0,2,TimeUnit.SECONDS);
+  }
+  /** The sidebar as startUp() first draws it, from the stored settings: the colour scheme, the risk level together
+   *  with "Max share of cash per trade" (so High with "No limit" is named from the first frame), and the action row
+   *  dimmed until there is a pick. Swing EDT. Package-private so a test can draw it without a client. */
+  EviLivePanel buildPanel() {
+    EviLivePanel p=new EviLivePanel(this::skipSuggestion,this::flagPersonalUse,this::flagNotHeld,this::blockSuggestion,this::resetProfit,this::clearSkips,this::acceptSuggestion,this::chooseRisk);
+    p.applyTheme(config.panelTheme());
+    p.riskLevel(config.riskLevelV2(),config.maxTradeShare());
+    p.actions(false,false,false,false,false);
+    p.onHoldingLine(this::holdingLinePersonalUse,this::holdingLineGone);
+    // Block is kept per character and undone in the panel's Blocked items list
+    p.onUnblock(this::unblockItem);
+    // the trade-log invitation at the bottom: shown unless "Not now" was pressed at this very version
+    p.onShare(this::saveTradeLog,this::dismissShareInvite);
+    p.shareInvite(shareInviteShown());
+    return p;
+  }
+  /** Whether the sidebar's trade-log invitation shows: not after "Not now" at this version (ShareInvite.shown). */
+  boolean shareInviteShown() {
+    return ShareInvite.shown(config==null?null:config.shareInviteDismissedVersion(),WikiPriceClient.VERSION);
+  }
+  // Called only from the invitation's "Not now" (Swing EDT): keeps the version it was pressed at, through the same config the
+  // settings use (a hidden item), so the invitation stays away until the next EVI update. Writes nothing else.
+  void dismissShareInvite() {
+    java.util.function.BiConsumer<String,String> write=configWriter;
+    if(write!=null)write.accept(ShareInvite.CONFIG_KEY,WikiPriceClient.VERSION);
+    else if(configManager!=null)configManager.setConfiguration(CONFIG_GROUP,ShareInvite.CONFIG_KEY,WikiPriceClient.VERSION);
+    if(panel!=null)panel.shareInvite(false);
+  }
+  // Called only from the invitation's "Save my trade log..." (Swing EDT). Voluntary sharing, 9 Oct 2026: asks first, then the
+  // journal builds and writes the file on ITS thread (never this one, never the client thread); the answer comes back here.
+  // Nothing is sent anywhere: the player opens, reads and sends the file themselves.
+  void saveTradeLog() {
+    EviLivePanel p=panel;
+    if(p==null || !ShareInvite.confirm(p))return;
+    PluginJournal j=journal;
+    if(j==null){ShareInvite.failed(p,new IllegalStateException("EVI's trade record is not running."));return;}
+    String name=com.evi.live.journal.TradeLogExport.fileName(java.time.LocalDate.now());
+    // EVI's suggested price beside each offer it can be linked to: the suggestion-outcome join (SuggestionOutcomes, the port of
+    // suggestionOutcomes.mjs) over the plugin's own suggestion log (the SuggestionRecords startInProcess built), run on the
+    // journal's thread. If the engine never started there are no records, and every offer is left unlinked -- never guessed.
+    final SuggestionRecords records=suggestionRecords;
+    j.exportTradeLog(name,System.currentTimeMillis(),(state,offers)->com.evi.live.inprocess.SuggestionOutcomes.offerLinks(records,state,offers)).whenComplete((saved,err)->SwingUtilities.invokeLater(()->{
+      if(err!=null || saved==null){
+        log.warn("EVI: the trade log was not saved",err);
+        ShareInvite.failed(p,err!=null?err:new IllegalStateException("nothing was saved"));
+        return;
+      }
+      ShareInvite.saved(p,saved.offers,saved.flips,name,copyToClipboard(saved.file.toString()));
+    }));
+  }
+  /** Puts text on the system clipboard; false when there is none to put it on (a headless test, a locked clipboard). */
+  static boolean copyToClipboard(String text) {
+    try {
+      java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text),null);
+      return true;
+    } catch(RuntimeException ex){return false;}
   }
   @Override protected void shutDown() {
     running=false;
     ++lifecycle;
-    if(sender!=null)sender.shutdownNow();
+    // First, so no later teardown step that throws can leave the journal's thread running.
+    stopJournal();
+    stopPrices();
+    stopInProcess();
+    // An orderly stop, never shutdownNow(): that interrupts the sender's thread, and Thread.interrupt is on
+    // the Hub's forbidden list. Periodic tasks stop; a request in flight finishes (bounded by the transport's
+    // own timeouts) and finds the lifecycle moved on. Waiting for it happens off the client thread.
+    if(sender!=null)stopOffThread(sender,SENDER_STOP_WAIT_MS,m->log.warn(m));
     suggestionKeybindHandler.unregister();
     overlayManager.remove(searchHighlightOverlay);
     suggestionCache.set(null);
     openItemPriceCache.set(null);
     updatePanelSuggestion(null, null);
-    updatePanelOfferHint(Collections.emptyList(), null, null, null);
+    updatePanelOfferHint(Collections.emptyList(), null, null, null, null);
     try { suggestionHintWidget.clear(); } catch (Exception ignored) { }
     try { itemSelectWidget.clear(); } catch (Exception ignored) { }
     if(navigation!=null)toolbar.removeNavigation(navigation);
-    synchronized(queue){queue.clear();}
     reset();
   }
-  private void status(String message){if(panel!=null)panel.status(message);}
-  /** Setup that is finished costs the 225px sidebar room it needs for the pick, so the pairing
-   *  fields go away once a key is held and come back if it is ever cleared. */
-  // A key is only "paired" if the bridge accepts it. Hiding the field on SAVE rather than on
-  // success made a mistyped key a one-way door: the field, the Save button and the whole section
-  // vanish, and the only way back is deleting plugin-key.txt from .runelite/plugin-data/evi-live --
-  // which no player should have to be told. A 401 now brings the section straight back, so the
-  // message telling them which key to paste has somewhere to paste it.
-  /** Whether the panel should treat the plugin as paired, and so hide the key field.
-   *
-   *  A key counts only if one is saved AND the bridge is not refusing it. Keying this on the save
-   *  alone made a mistyped key a one-way door: the field, the Save button and the whole section
-   *  vanish, and the only way back is deleting plugin-key.txt from .runelite/plugin-data/evi-live,
-   *  which no player should have to be told. Static so it can be tested without a Swing panel. */
-  static boolean showAsPaired(String key, boolean rejected){ return key!=null && !key.isEmpty() && !rejected; }
-  private void refreshPairingVisibility(){if(panel!=null)panel.paired(showAsPaired(pluginKey,keyRejected));}
-  private void pair(String entered) {
+  /** Opens the plugin's own journal in its data folder. Every file operation, including this first load,
+   *  runs on the journal's own thread; nothing here touches the disk. A journal that cannot start is
+   *  logged and left off -- it never stops the plugin (the engine then answers "no journal"). */
+  private void startJournal(Filepath dir) {
+    PluginJournal previous=retiredJournal;
+    retiredJournal=null;
     try {
-      final long generation=lifecycle;
-      String key=PairingKey.normalize(entered);
-      pairingPath.write(key);
-      clientThread.invokeLater(()->{
-        if(!running || generation!=lifecycle)return;
-        synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
-        keyRejected=false; // a new key is a fresh attempt, not the refused one
-        reset();
-        status("Pairing saved. Log in; connection is checked when the first snapshot is sent.");
-        refreshPairingVisibility();
-      });
-    }catch(IllegalArgumentException ex){status(ex.getMessage());}
-    catch(Exception ex){status("Could not save the key. Check write access to .runelite/plugin-data/evi-live.");}
+      PluginJournal j=new PluginJournal(dir,System::currentTimeMillis,s->gson.fromJson(s,JsonElement.class),
+        ()->config.importBridgeHistory(),m->log.info(m));
+      // The sidebar's import line follows the journal, which is the one place that looks for the file (on its own
+      // thread; the panel only ever hears a sentence or null).
+      j.onImportNotice(this::showImportNotice);
+      // The import takes the old companion app's machine-wide "Yours, not stock" marks with each account's import.
+      j.importItemMarks(()->true);
+      // ...and its flip histories from another tracker, kept by character name: told at login, before the first packet.
+      j.expectCharacterNames(true);
+      j.start(previous); // waits for the previous journal on the new journal's own thread, never here
+      journal=j;
+    } catch(Exception ex){log.warn("EVI journal: not started",ex);}
   }
+  /** Starts the price-data layer. Every request and file operation runs on its own thread (evi-prices); nothing here
+   *  touches the disk or the network. A layer that cannot start is logged and left off -- it never stops the plugin. */
+  private void startPrices(Filepath dir) {
+    PriceDataService previous=retiredPrices;
+    retiredPrices=null;
+    try {
+      PriceDataService p=new PriceDataService(dir,new WikiPriceClient(okHttpClient,()->client!=null&&client.isClientThread()),
+        System::currentTimeMillis,PriceDataService.MONOTONIC_MS,m->log.info(m));
+      p.start(previous); // waits for the previous layer on the new layer's own thread, never here
+      p.loggedIn(client!=null&&client.getGameState()==GameState.LOGGED_IN);
+      prices=p;
+    } catch(Exception ex){log.warn("EVI prices: not started",ex);}
+  }
+  /** Builds the plugin's engine and the source the poll asks it through. Starts no thread until the first poll hands it a
+   *  query. One that cannot be built is logged; the sidebar then says so on each poll. */
+  private void startInProcess(Filepath dir) {
+    stopInProcess();
+    try {
+      inProcessProfitSince=readProfitSince();
+      lastProfile=readLastProfile();
+      SuggestionRecords records=new SuggestionRecords(dir,text->gson.fromJson(text,JsonElement.class),m->log.info(m));
+      inProcessDir=dir;
+      InProcessEngine engine=new InProcessEngine(dir,EngineFeed.journalOf(()->journal),EngineFeed.marketOf(()->prices),
+        text->gson.fromJson(text,JsonElement.class),m->log.info(m),
+        ()->(client!=null&&client.isClientThread())||SwingUtilities.isEventDispatchThread(),()->inProcessProfitSince,null,this::blockedFor,records);
+      suggestionRecords=records;
+      inProcess=engine;
+      answers=new InProcessTransport(engine,System::currentTimeMillis);
+    } catch(Exception ex){log.warn("EVI engine: not started",ex);}
+  }
+  /** The Block list the engine reads for a query naming {@code acct}: that account's character's list; none for an account this
+   *  plugin lifetime has not worked out a profile for. A query naming NO account (before login, or between a logout and the next
+   *  login) reads the LAST logged-in character's list (lastProfile), or none if no character ever logged in. Any thread (the engine's). */
+  java.util.Collection<Integer> blockedFor(String acct) {
+    String p=acct==null||acct.isEmpty()?lastProfile:accountProfiles.get(acct);
+    return p==null||p.isEmpty()?Collections.emptyList():blockedItems.all(p);
+  }
+  /** The last logged-in character's RuneScape profile from the config (null: none stored, or no ConfigManager in a test). */
+  private String readLastProfile() {
+    try {
+      ConfigManager cm=configManager;
+      String v=cm==null?null:cm.getConfiguration(CONFIG_GROUP,LAST_PROFILE_KEY);
+      return v==null||v.trim().isEmpty()?null:v.trim();
+    } catch(Exception ex){ return null; }
+  }
+  /** Remembers {@code rsProfile} as the last logged-in character (the client thread, at login). Written only when it changes.
+   *  A config that cannot be written still remembers it for this plugin lifetime. */
+  private void rememberLastProfile(String rsProfile) {
+    if(rsProfile==null || rsProfile.isEmpty())return;
+    lastProfile=rsProfile;
+    try {
+      ConfigManager cm=configManager;
+      if(cm!=null && !rsProfile.equals(cm.getConfiguration(CONFIG_GROUP,LAST_PROFILE_KEY)))cm.setConfiguration(CONFIG_GROUP,LAST_PROFILE_KEY,rsProfile);
+    } catch(Exception ignored){ /* kept in memory for this lifetime; the next login tries again */ }
+  }
+  /** The RuneScape profile the current account belongs to, or null when no account is worked out yet. */
+  private String currentProfile() {
+    String a=account;
+    return a==null?null:accountProfiles.get(a);
+  }
+  /** Stops the in-process engine's thread: shutdown(), never shutdownNow(); an answer being worked out finishes. */
+  private void stopInProcess() {
+    InProcessEngine engine=inProcess;
+    inProcess=null;
+    answers=null;
+    suggestionRecords=null;
+    if(engine!=null)engine.shutdown();
+  }
+  /** The profit reset, from the config (null: never reset, or nothing stored, or no ConfigManager in a test). */
+  private Long readProfitSince() {
+    try {
+      ConfigManager cm=configManager;
+      String v=cm==null?null:cm.getConfiguration(CONFIG_GROUP,PROFIT_SINCE_KEY);
+      return v==null||v.isEmpty()?null:Long.valueOf(v.trim());
+    } catch(Exception ex){ return null; }
+  }
+  /** Stops the price-data thread: shutdown(), never shutdownNow(), so nothing is interrupted; a request in flight
+   *  finishes (bounded by its 20 s call limit) and nothing new starts. The stopped layer is kept for the next
+   *  startPrices() to wait for. */
+  private void stopPrices() {
+    PriceDataService p=prices;
+    prices=null;
+    if(p!=null){p.shutdown();retiredPrices=p;}
+  }
+  /** Stops the journal's thread: shutdown(), never shutdownNow(), so queued writes finish and nothing is
+   *  interrupted. The stopped journal is kept for the next startJournal() to hand over to. */
+  private void stopJournal() {
+    PluginJournal j=journal;
+    journal=null;
+    if(j!=null){j.shutdown();retiredJournal=j;}
+  }
+  /** shutdown() (never shutdownNow()), then a short-lived daemon thread -- not the caller's, which is the
+   *  client or Swing thread -- waits up to waitMs for the executor to finish, and says so if it did not.
+   *  Nothing is interrupted, including that helper. Returns the helper thread (tests join it). */
+  static Thread stopOffThread(ExecutorService executor,long waitMs,java.util.function.Consumer<String> warn) {
+    executor.shutdown();
+    Thread t=new Thread(()->{
+      try {
+        if(!executor.awaitTermination(waitMs,TimeUnit.MILLISECONDS))
+          warn.accept("EVI Live: the suggestion poll was still busy "+waitMs/1000+" s after shutdown; it finishes on its own (a daemon thread, never interrupted)");
+      } catch(InterruptedException ignored) {
+        // nothing in EVI interrupts this thread; if anything else does, it simply stops waiting
+      }
+    },"evi-sender-stop");
+    t.setDaemon(true);
+    t.start();
+    return t;
+  }
+  private void status(String message){if(panel!=null)panel.status(message);}
+  /** The journal's import line ("Import is on, but no file was found at ..."), under the status line: shown while the import
+   *  setting is on, its file is missing and the account is not yet imported; hidden (null) otherwise. The journal decides which. */
+  private void showImportNotice(String message){EviLivePanel p=panel;if(p!=null)p.importNotice(message);}
   // Filepath has no Files.readString()-equivalent single-call helper, so this reads the whole
   // (small, single-line) file through its buffered UTF-8 Reader and trims it the same way the
   // old Files.readString(...).trim() call did.
@@ -372,46 +611,6 @@ public class EviLivePlugin extends Plugin {
    *  Besides being the kind of thing a Hub reviewer flags, it could read a half-swapped world view
    *  during a region change and report an instance in the overworld, or none inside a raid -- which
    *  is precisely the case this feature exists for. */
-  /** What to tell the player when the bridge returned no suggestion body.
-   *
-   *  A rejected key and an unreachable companion app both arrive as a null body, and they need
-   *  opposite advice. Sending someone to check that the app is running, while it is running and
-   *  answering, points them at the one thing that is not wrong: EVI's second user was shown
-   *  "Bridge unreachable" and "Bridge rejected the key" in the same panel, and the app was fine.
-   *
-   *  A 401 is the bridge ANSWERING, so it is named as a key problem, and the message says which of
-   *  the two keys to use -- the app prints "Scanner key" and "RuneLite plugin key" on adjacent
-   *  lines, and taking the wrong one is the easy mistake. Any other status, including none at all,
-   *  keeps the original wording, because then it really may be unreachable. */
-  /** Should the player be told their companion app is behind this plugin?
-   *
-   *  `reported` is what GET /api/version said: -1 when it could not be read, 0 for a bridge too old
-   *  to have that route at all (it answers 401, which the transport maps to 0).
-   *
-   *  Unknown (-1) says NOTHING. A bridge that is merely unreachable, or a key being rejected, must
-   *  not also be accused of being out of date -- EVI has already shipped one panel showing two
-   *  contradictory messages at once, and this is exactly how that happens again.
-   *
-   *  `keyAccepted` guards the 0 case for the same reason: a pre-version bridge and a wrong key both
-   *  produce a 401, so an old bridge is only claimed when ordinary calls are demonstrably working. */
-  static boolean bridgeOutOfDate(int reported, boolean keyAccepted) {
-    if (reported < 0) return false;
-    if (reported == 0) return keyAccepted;
-    return reported < EXPECTED_BRIDGE_API;
-  }
-
-  /** One short sentence, and never alarming: an older companion app works, it just does less. */
-  static String bridgeOutOfDateMessage() {
-    return "Your EVI Live companion app is older than this plugin, so some newer suggestions and "
-      + "sidebar notes are missing. Nothing is broken -- download the latest one and replace your "
-      + "folder, keeping your data folder.";
-  }
-
-  static String bridgeFailureMessage(int status) {
-    return status==401
-      ? "Wrong key. EVI reached the companion app and it refused this key -- paste the one it prints as \"RuneLite plugin key\", not the Scanner key."
-      : "Bridge unreachable -- check it's running and the pairing key matches.";
-  }
   private void refreshInInstance() {
     try {
       net.runelite.api.WorldView wv=client.getTopLevelWorldView();
@@ -419,7 +618,7 @@ public class EviLivePlugin extends Plugin {
     } catch(Throwable ignored){ inInstance=false; }
   }
 
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;bridgeApi=-1;}
+  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -509,9 +708,9 @@ public class EviLivePlugin extends Plugin {
     if(!unverifiableItemIds.isEmpty() && !ids.equals(inventoryItemIds))unverifiableItemIds.clear();
   }
   // A noted item's own ItemContainer/Item.getId() is a DIFFERENT item ID from the unnoted item it
-  // represents -- confirmed against a real report (11 noted "Contract of glyphic attenuation" in
-  // inventory, "Suggest selling idle inventory" turned on, still no suggestion even though the
-  // item itself has healthy GE volume and a live price around 130k+ gp each). Both
+  // represents -- confirmed against a real report (a noted stack in the inventory, "Suggest selling
+  // idle inventory" turned on, still no suggestion even though the item itself has healthy GE
+  // volume and a live price). Both
   // verifyPersistedHolding and computeInventorySuggestion (bridge-side, via the itemId this sends)
   // need the UNNOTED id -- that's what the OSRS Wiki price API and /mapping endpoint are keyed by,
   // not the note's own id -- so every id collected in refreshInventoryItemIds() is resolved through
@@ -549,7 +748,7 @@ public class EviLivePlugin extends Plugin {
   // item that isn't there. A hiccup or a not-yet-loaded inventory should never silently suppress a
   // real reminder; a confirmed-empty one should. Checks the inventory only, not the bank -- an item
   // collected straight to the bank rather than the inventory will not be recognised this way; a
-  // known, accepted limitation for now, not a bug (see README).
+  // known, accepted limitation for now, not a bug (see the project notes).
   private boolean verifyPersistedHolding(Suggestion s) {
     if(!inventorySnapshotEstablished)return true;
     return inventoryItemIds.contains(s.itemId);
@@ -624,79 +823,42 @@ public class EviLivePlugin extends Plugin {
 
   // Colour scheme changes take effect at once: the panel repaints itself rather than waiting for a
   // client restart, which for a purely cosmetic setting would read as the setting not working.
+  // The risk level likewise: chosen in the settings panel, the sidebar's buttons follow at once.
   @Subscribe public void onConfigChanged(ConfigChanged e) {
-    if(!"evilive".equals(e.getGroup()) || !"panelTheme".equals(e.getKey()))return;
-    if(panel!=null)panel.applyTheme(config.panelTheme());
+    if(!CONFIG_GROUP.equals(e.getGroup()))return;
+    if("panelTheme".equals(e.getKey())){if(panel!=null)panel.applyTheme(config.panelTheme());}
+    else if(RISK_KEY.equals(e.getKey())||SHARE_KEY.equals(e.getKey())){if(panel!=null)panel.riskLevel(config.riskLevelV2(),config.maxTradeShare());}
+    // On or off: the journal re-reads the setting, so the import line appears or goes at once, not at the next packet.
+    else if("importBridgeHistory".equals(e.getKey())){PluginJournal j=journal;if(j!=null)j.importRequested();}
+    else if(ShareInvite.CONFIG_KEY.equals(e.getKey())){if(panel!=null)panel.shareInvite(shareInviteShown());}
+  }
+  /** One of the sidebar's three risk buttons was pressed (Swing EDT).
+   *
+   *  Writes the SAME config key the settings panel's "Risk level" uses, through ConfigManager, so the
+   *  two places can never disagree and the choice is stored exactly as if it had been made in the
+   *  settings. The next poll reads it -- and one is asked for straight away, like Skip, so the press
+   *  is seen to take. Nothing about the level itself lives in the plugin: it is sent as risk= and the
+   *  bridge decides what it means. */
+  void chooseRisk(RiskLevel level) {
+    if(level==null)return;
+    java.util.function.BiConsumer<String,String> write=configWriter;
+    if(write!=null)write.accept(RISK_KEY,level.name());
+    else if(configManager!=null)configManager.setConfiguration(CONFIG_GROUP,RISK_KEY,level.name());
+    if(panel!=null)panel.riskLevel(level,config==null?null:config.maxTradeShare());
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
 
   @Subscribe public void onGameStateChanged(GameStateChanged e) {
+    // The latest Wiki prices are fetched only while a player is logged in.
+    PriceDataService p=prices;
+    if(p!=null)p.loggedIn(e.getGameState()==GameState.LOGGED_IN);
     if(e.getGameState()==GameState.LOGIN_SCREEN || e.getGameState()==GameState.HOPPING || e.getGameState()==GameState.CONNECTION_LOST) {
       if(ready)enqueue(false);
       reset();
     }
   }
-  /** Ticks between looks at the key file while unpaired. ~5s at 600ms, so pairing feels instant
-   *  without putting a stat() on every tick. */
-  private static final int PAIRING_POLL_TICKS=8;
-  private int pairingPollTicks;
-  /** Pick up a key the companion app wrote into plugin-key.txt, so nobody has to copy one.
-   *
-   *  The app and this plugin are on the same machine by definition -- the plugin only ever talks to
-   *  127.0.0.1 -- so the app can simply write the key where this already reads it. Without this the
-   *  player would still have to restart the client once for a key that is sitting right there.
-   *
-   *  The read happens on the sender thread, never on the client thread: this runs from onGameTick,
-   *  and a stat() plus a read on the client thread is exactly the class of fault a review caught
-   *  here before. State is then applied on the client thread, the same shape pair() uses, with the
-   *  same lifecycle guard so a plugin stopped mid-read cannot resurrect itself. */
-  /** Whether to look at plugin-key.txt again on this tick.
-   *
-   *  A REFUSED key has to keep looking, and that is the whole point of this method existing. The
-   *  first version only polled when no key was held, so a player who had pasted the Scanner key by
-   *  mistake -- the documented easy error, behind two user bug reports -- kept sending it and kept
-   *  getting 401s even after the app had written the right key into the file. Only restarting the
-   *  client cured it, which is exactly the thing auto-pairing was built to end. The end-to-end test
-   *  missed it because it DELETED the key first, so it only ever exercised the no-key path.
-   *
-   *  A key that is working is deliberately NOT re-read: there is no reason to stat a file every few
-   *  seconds while nothing is wrong. */
-  static boolean shouldPollForPairingKey(String pluginKey, boolean keyRejected) {
-    return pluginKey==null || keyRejected;
-  }
-  /** Whether a key just read from that file replaces the one in use.
-   *
-   *  The differs check is load-bearing, not tidiness: while a key is being refused this polls every
-   *  few seconds, and adopting an IDENTICAL key would call reset() each time, restarting the session
-   *  on a loop. Only a genuinely different key is adopted. */
-  static boolean shouldAdoptPairingKey(String fileKey, String pluginKey) {
-    return fileKey!=null && !fileKey.equals(pluginKey);
-  }
-  private void pollForPairingKey() {
-    if(pairingPath==null || sender==null || ++pairingPollTicks<PAIRING_POLL_TICKS)return;
-    pairingPollTicks=0;
-    final long generation=lifecycle;
-    sender.execute(()->{
-      final String key;
-      try {
-        if(!pairingPath.exists())return;
-        key=PairingKey.normalize(readTrimmed(pairingPath));
-      } catch(Exception ex){return;} // absent, half-written or invalid: just look again shortly
-      clientThread.invokeLater(()->{
-        if(!running || generation!=lifecycle || !shouldAdoptPairingKey(key,pluginKey))return;
-        final boolean replacing=pluginKey!=null;
-        synchronized(queue){pluginKey=key;++pairingRevision;queue.clear();}
-        keyRejected=false;
-        reset();
-        status(replacing?"The EVI companion app replaced the key the bridge was refusing."
-                      :"Paired automatically by the EVI companion app.");
-        refreshPairingVisibility();
-      });
-    });
-  }
   @Subscribe public void onGameTick(GameTick e) {
     if(!running)return;
-    if(shouldPollForPairingKey(pluginKey,keyRejected))pollForPairingKey();
-    if(pluginKey==null)return;
     if(client.getGameState()!=GameState.LOGGED_IN)return;
     try { suggestionHintWidget.update(); } catch (Exception ignored) { } // never let a widget hiccup break observation
     try { itemSelectWidget.update(); } catch (Exception ignored) { }
@@ -715,16 +877,35 @@ public class EviLivePlugin extends Plugin {
         profile=current;
         economy=currentEconomy;
         // Ordinary worlds retain the existing account pseudonym for compatibility.
-        String identity=salt+":"+profile+(economy.isEmpty()?"":":economy:"+economy);
-        byte[] hash=MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8));
-        StringBuilder h=new StringBuilder();for(byte b:hash)h.append(String.format("%02x",b&255));account=h.toString();
+        account=AccountIds.of(salt,profile,economy);
+        accountProfiles.put(account,profile);
+        rememberLastProfile(profile);
+        tellCharacterName();
         GrandExchangeOffer[] offers=client.getGrandExchangeOffers();
         if(offers==null || offers.length!=8)return;
         for(int i=0;i<8;i++)slots[i]=capture(i,offers[i],null,false);
         refreshActiveSlotItemIds();
         ready=true;enqueue(true);
       } catch(Exception ex){reset();}
-    } else if(++ticks%15==0)enqueue(true);
+    } else if(++ticks%15==0){tellCharacterName();enqueue(true);}
+  }
+  /** The account's character name to the journal (its import takes the flips kept under that name), once it is known.
+   *  Client thread (the local player is read here); the journal only stores it. Told again until it is known. */
+  private PluginJournal namedJournal;
+  private String namedAccount;
+  private void tellCharacterName() {
+    PluginJournal j=journal;
+    String a=account;
+    if(j==null||a==null||(j==namedJournal&&a.equals(namedAccount)))return;
+    j.accountIdentity(a,profile,economy); // what this folder's salt was combined with: the import's old-salt match needs it
+    try {
+      net.runelite.api.Player me=client.getLocalPlayer();
+      String name=me==null?null:me.getName();
+      if(name==null||name.trim().isEmpty())return;
+      j.characterName(a,name);
+      namedJournal=j;
+      namedAccount=a;
+    } catch(Exception ignored) { } // the name is only for the import; a failure tries again at the next packet
   }
   @Subscribe public void onGrandExchangeOfferChanged(GrandExchangeOfferChanged e) {
     if(!ready||client.getGameState()!=GameState.LOGGED_IN||!profile.equals(configManager.getRSProfileKey())||!EconomyScope.of(client.getWorldType()).equals(economy))return;
@@ -769,92 +950,44 @@ public class EviLivePlugin extends Plugin {
     Packet p=new Packet();p.session=session;p.account=account;p.seq=++seq;p.ts=System.currentTimeMillis();p.loggedIn=loggedIn;
     if(loggedIn)p.offers.addAll(Arrays.asList(slots));
     String json=gson.toJson(p); // immutable snapshot created on the client thread
-    synchronized(queue) {
-      if(queue.size()>=512) {
-        queue.clear();reset(); // Conservative rebaseline after data loss; do not fabricate complete trades.
-        log.warn("EVI Live: local delivery queue overflow; observation restarted. Review missing trades manually.");
-        status("Delivery queue filled while disconnected. Observation restarted; review missing trades manually.");
-        return;
-      }
-      queue.add(json);
-    }
-  }
-  private void flush(long generation) {
-    for(int count=0;count<32&&running&&generation==lifecycle&&!Thread.currentThread().isInterrupted();count++) {
-      String json,key;long revision;
-      synchronized(queue){json=queue.peek();key=pluginKey;revision=pairingRevision;}if(json==null)return;
-      try {
-        int status=transport.send(key,json);
-        if(!running || generation!=lifecycle)return;
-        synchronized(queue){if(revision!=pairingRevision)return;}
-        if(status==401){keyRejected=true;refreshPairingVisibility();}
-        else if(keyRejected){keyRejected=false;refreshPairingVisibility();}
-        if(status!=200){status(status==401?"Bridge rejected the key. Paste this bridge's RuneLite plugin key.":"Bridge returned HTTP "+status+". Pending observations retained for retry.");return;}
-        synchronized(queue){if(json.equals(queue.peek()))queue.remove();}
-        status("Connected to the local bridge. Last delivery: "+java.time.LocalTime.now().withNano(0));
-      } catch(Exception ignored){if(running&&generation==lifecycle)status("Bridge unavailable. Start EVI; queued observations will retry automatically.");return;}
-    }
+    // To the plugin's own journal. Only handed over here; the journal's thread does the rest.
+    PluginJournal j=journal;
+    if(j!=null)j.offerPacket(json);
   }
   // Polls regardless of whether a GE slot is open, so the sidebar's "Current suggestion" summary
   // stays populated like Copilot's does, not just while an offer screen happens to be on screen.
   // (It used to gate on slotOpenHint; that left the panel stuck on "No suggestion yet." for anyone
-  // checking it outside an open offer screen, even with eligible reviewed-flip history.) The bridge
-  // call is local-loopback and the underlying Wiki price fetch is itself cached for 60s, so this
-  // stays cheap. Only ever updates the in-memory cache the hotkey handler reads — never writes
+  // checking it outside an open offer screen, even with eligible reviewed-flip history.) The engine
+  // answers from data already in memory (no request is made per poll), so this stays cheap. Only ever updates the in-memory cache the hotkey handler reads — never writes
   // anything back to the game itself; filling still separately requires the real GE prompt to be
   // open for the matching item (see GEOffer.openFieldFor), so this change does not loosen that gate.
-  /** Reads the companion app's API once, on the sender thread, and leaves it alone afterwards.
-   *
-   *  Asked only while still unknown: this is a constant for the life of a bridge process, so polling
-   *  it every two seconds alongside the suggestion would be pure noise. It retries whenever it is
-   *  still -1, which covers the bridge being started after RuneLite. */
-  /** Called ONLY after a suggestion request has come back 200, which matters more than it looks.
-   *
-   *  `version()` reports 0 for a 401, meaning "a bridge too old to have this route" -- but a WRONG
-   *  KEY produces the same 401. This used to run before the first suggestion, when neither was known
-   *  yet, and the result was latched for the session. So: paste the Scanner key by mistake (the
-   *  documented easy error), get a 401, latch 0, then paste the right key -- `keyRejected` clears,
-   *  nothing re-reads, and the sidebar says "Companion app out of date" for ever against a perfectly
-   *  current bridge. Found on a second machine on 2 Oct 2026, on a freshly downloaded latest bundle.
-   *  `reset()` did not clear it either, so only restarting RuneLite cured it.
-   *
-   *  Moving the call behind a 200 makes a 0 trustworthy: the key demonstrably works, so a 401 HERE
-   *  really is a bridge without the route. The value is still read once and cached, because it
-   *  cannot change while a bridge process is running. `reset()` clears it so a newly pasted key,
-   *  which may point at an entirely different bridge, starts over. */
-  private void refreshBridgeApi(String key) {
-    if(bridgeApi>=0 || key==null)return;
-    try { bridgeApi=transport.version(key); } catch(Exception ignored){ /* stays -1: says nothing */ }
+  /** The status line (when the Wiki prices last arrived) and the price-history line, from one answer. */
+  private void showInProcessStatus(InProcessEngine.Answer answer) {
+    if(answer==null)return;
+    status(inProcessStatus(answer.latestFetchedAtMs));
+    EviLivePanel p=panel;
+    if(p!=null)p.backfillNotice(answer.backfillLine);
   }
-
+  /** The engine's status line. "Connected" only once prices have actually arrived (the dot turns green on it). */
+  static String inProcessStatus(long latestFetchedAtMs) {
+    if(latestFetchedAtMs<=0)return IN_PROCESS_WAITING;
+    return "Connected to OSRS Wiki prices. Last update: "+java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss",java.util.Locale.US)
+      .format(java.time.Instant.ofEpochMilli(latestFetchedAtMs).atZone(java.time.ZoneId.systemDefault()));
+  }
   private void pollSuggestion(long generation) {
     if(!running || generation!=lifecycle)return;
-    String key=pluginKey;
-    if(key==null)return;
     try {
-      String json=transport.get(key,suggestionQuery());
+      final String query=suggestionQuery();
+      final AnswerSource own=answers;
+      if(own==null){updatePanelSuggestion(null,"EVI's built-in engine did not start. Details are in the client log.");return;}
+      importBridgePreferences();refreshBlockedSection();
+      String json=own.get(query);
       if(!running || generation!=lifecycle)return;
-      // Distinguishes "bridge reachable but returned nothing" from a request that never even got a
-      // 200, so the sidebar can say which one is happening instead of collapsing both into a bare
-      // "No suggestion yet."
-      // A rejected key and an unreachable bridge both arrive here as a null body, and they need
-      // opposite advice. Telling a player to check the companion app is running, while it is running
-      // and answering, sends them to look at the one thing that is not wrong -- EVI's second user was
-      // shown this and "Bridge rejected the key" side by side in the same panel. 401 is the bridge
-      // ANSWERING, so it is named as such, and the message says which of the two printed keys to use,
-      // because they sit adjacent in its window and the wrong one is the easy mistake.
-      if(json==null){
-        int status=0;
-        try{status=transport.lastGetStatus();}catch(Throwable ignored){}
-        // Same as the events path: a refused key un-pairs, so the field comes back to be corrected.
-        if(status==401 && !keyRejected){keyRejected=true;refreshPairingVisibility();}
-        updatePanelSuggestion(null,bridgeFailureMessage(status));
-        return;
-      }
-      if(keyRejected){keyRejected=false;refreshPairingVisibility();}
-      // Only now, with a 200 in hand, is it safe to ask which API the bridge speaks -- see
-      // refreshBridgeApi for why asking any earlier produced a permanent false "out of date".
-      refreshBridgeApi(key);
+      InProcessEngine.Answer answer=own.lastAnswer();
+      // Still working on this query and nothing to reuse: leave the sidebar exactly as it is (never blank it).
+      if(json==null && own.lastGetStatus()==InProcessTransport.PENDING)return;
+      showInProcessStatus(answer);
+      if(json==null){updatePanelSuggestion(null,answer==null?null:answer.unavailable);return;}
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
       // Remember which positions the bridge believes are held, so the next poll can confirm them
@@ -881,27 +1014,31 @@ public class EviLivePlugin extends Plugin {
       openItemPriceCache.set(r==null?null:r.openItemPrice);
       // A buy held back to keep room for the sells already owed is a different answer from nothing
       // being eligible, and saying "nothing passes your settings" there would be plainly wrong.
-      String diagnosis=r!=null&&r.slots!=null&&r.slots.buysHeldForExits
+      InProcessEngine.Answer used=answer;
+      String diagnosis=used!=null&&!used.buysReady
+        // the buy tiers were not asked at all, so neither "nothing passes" nor the slot reserve is the reason
+        ?BUYS_PAUSED
+        :r!=null&&r.slots!=null&&r.slots.buysHeldForExits
         ?sellReserveMessage(r.slots.sellSlotsOwed)
-        :noSuggestionMessage(config.includeMarketSuggestions(),config.marginSafetyCushion(),freeSlots,collectableSlots)
+        :noSuggestionMessage(config.includeMarketWide(),config.marginSafetyCushion(),freeSlots,collectableSlots,config.suggestionSource())
           +reachableMessage(r==null?null:r.reachable);
       updatePanelSuggestion(s,s==null?diagnosis:null);
       // The session list is what shapes everything above it; kept on screen so it is never the
       // invisible reason a suggestion looks poor.
-      if(panel!=null)panel.skipped(skippedItemIds.size());
+      if(panel!=null)panel.skipped(setAsideCount());
       // The second and third positions, when asked for. An older bridge sends none and the section
       // stays hidden; so does a default install, which never asks for more than one.
       if(panel!=null)panel.alsoSuggested(r==null||r.additional==null
         ?java.util.Collections.emptyList():java.util.Arrays.asList(r.additional));
       if(panel!=null)panel.profit(r==null?null:r.profit);
-      updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice);
+      updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice,r==null?null:r.sellBreakEven);
     } catch(Throwable ex){
       // Deliberately catches Throwable, not just Exception, and kept that way permanently: a
       // periodic ScheduledExecutorService task that lets ANY throwable escape -- including an
       // Error, which a plain "catch(Exception)" does NOT catch -- gets silently cancelled forever
       // by the executor, with nothing printed anywhere. (This is exactly how a package-private
       // RiskLevel enum being inaccessible to RuneLite's config proxy took suggestions down
-      // completely -- see RiskLevel.java and the 2026-09-15 README entry.) Logging the full trace
+      // completely -- see RiskLevel.java and the project notes of 15 Sept 2026.) Logging the full trace
       // and showing a short message keeps any future unanticipated failure visible and recoverable
       // instead of silently killing suggestions forever.
       log.warn("EVI Live: suggestion check failed",ex);
@@ -917,7 +1054,7 @@ public class EviLivePlugin extends Plugin {
    *  The session list is cumulative, and until 28 Sept 2026 it was invisible and one-way: Skip,
    *  Block, "Mark as personal use", "I don't have this anymore" and the stale-holding re-check all
    *  feed it, and it cleared only on a profile change or a client restart. Working down from a
-   *  441,621 gp pick to one worth a few hundred looked like a ranking failure, and was really an
+   *  pick worth a few hundred thousand gp to one worth a few hundred looked like a ranking failure, and was really an
    *  accumulated filter with nothing on screen admitting it existed.
    *
    *  Deliberately does NOT touch the bridge's permanent blocklist: an item blocked there stays
@@ -925,46 +1062,104 @@ public class EviLivePlugin extends Plugin {
    *  this client session did to itself. */
   private void clearSkips() {
     skippedItemIds.clear();
+    skipMemory.clear(); // this account's four-hour skips go too: the button promises "show them again"
     if(panel!=null)panel.skipped(0);
     if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
+  }
+
+  /** How many items are set aside right now: the session's own exclusions plus this account's
+   *  four-hour Skips, each item counted once. Drives the sidebar's "N items set aside" line, so an
+   *  expired Skip drops out of the count on the next poll. */
+  int setAsideCount() {
+    Set<Integer> all=new java.util.HashSet<>(skippedItemIds);
+    all.addAll(skipMemory.active());
+    return all.size();
   }
 
   private void skipSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
-    skippedItemIds.add(s.itemId);
+    // Four hours on this account, surviving hops, relogs and restarts (see SkipMemory). With no
+    // account known yet there is nowhere per-account to keep it, so it lasts the session instead --
+    // the press must still apply to the item it was pressed on.
+    if(!skipMemory.skip(s.itemId))skippedItemIds.add(s.itemId);
     suggestionCache.set(null);
-    updatePanelSuggestion(null,"Skipped. Checking for the next suggestion...");
+    updatePanelSuggestion(null,"Skipped for 4 hours. Checking for the next suggestion...");
     if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
   // Called only from the sidebar's "Reset" button beside the profit line (Swing EDT). Starts the count
-  // from now; nothing about the journal, the flips or the profit total in the scanner changes, only where
-  // this one line counts from. The POST runs on the background sender, never the Swing thread.
+  // from now; nothing about the journal or the flips changes, only where this one line counts from. The plugin keeps
+  // the reset time under its own keyName and the engine reads it.
   private void resetProfit() {
-    String key=pluginKey;
     if(panel!=null)panel.profitResetPending();
-    if(running && sender!=null)sender.execute(()->{
-      if(key!=null){try{transport.resetProfit(key,"{}");}catch(Exception ignored){}}
-      pollSuggestion(lifecycle);
-    });
+    long now=System.currentTimeMillis();
+    inProcessProfitSince=now;
+    try{ConfigManager cm=configManager;if(cm!=null)cm.setConfiguration(CONFIG_GROUP,PROFIT_SINCE_KEY,String.valueOf(now));}catch(Exception ignored){}
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
   // Called only from the sidebar's "Block this item" button (Swing EDT). Skip made permanent: the item
-  // is excluded for this session at once (so the button feels immediate even if the bridge is slow),
-  // and the bridge is told to stop suggesting it for good. Only buys are blocked -- if the player
-  // already holds some, the bridge still sends the sell reminder, since going quiet about stock they
-  // own is how GP ends up stuck. The POST runs on the background sender, never the Swing thread.
+  // is excluded for this session at once, and kept on THIS character's Block list (BlockedItems), which the engine reads
+  // on the next poll. Only buys are blocked -- if the player already holds some, the engine still sends the sell reminder,
+  // since going quiet about stock they own is how GP ends up stuck. Undone from the sidebar's Blocked items list.
   private void blockSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
-    String key=pluginKey;final int itemId=s.itemId;
+    final int itemId=s.itemId;
     String name=s.name==null||s.name.isEmpty()?"this item":s.name;
     skippedItemIds.add(itemId);
     suggestionCache.set(null);
-    updatePanelSuggestion(null,"Blocked "+name+". EVI won't suggest buying it again (undo in the scanner). Checking for the next suggestion...");
-    if(running && sender!=null)sender.execute(()->{
-      if(key!=null){try{transport.markBlocked(key,gson.toJson(new BlockRequest(itemId)));}catch(Exception ignored){}}
-      pollSuggestion(lifecycle);
-    });
+    String p=currentProfile();
+    boolean saved=p!=null && blockedItems.block(p,itemId);
+    updatePanelSuggestion(null,saved
+      ?"Blocked "+name+" on this character. EVI won't suggest buying it again; undo it under Blocked items. Checking for the next suggestion..."
+      :"Set "+name+" aside for this session only: EVI could not save the block. Checking for the next suggestion...");
+    if(saved)refreshBlockedSection();
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
+  }
+  // Called only from an Unblock button in the sidebar's Blocked items list (Swing EDT). Takes the item off THIS character's
+  // list, lets it back into the session at once (Block also set it aside for the session), and re-polls so a buy of it can be
+  // suggested straight away.
+  void unblockItem(int itemId) {
+    String p=currentProfile();
+    if(p==null || !blockedItems.unblock(p,itemId)) {
+      if(panel!=null)panel.blockedNotice("EVI could not unblock that item just now. Try again once you are logged in.");
+      return;
+    }
+    skippedItemIds.remove(itemId);
+    if(panel!=null)panel.blockedNotice(null);
+    refreshBlockedSection();
+    if(panel!=null)panel.skipped(setAsideCount());
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
+  }
+  /** The one-time import of the old companion app's preferences (blocked items per character, the profit reset once;
+   *  BridgePreferencesImport) under the trade-history import setting. On the poll thread (it may read one small file). Never throws. */
+  private void importBridgePreferences() {
+    try {
+      ConfigManager cm=configManager;
+      if(cm==null)return;
+      BridgePreferencesImport.Result r=BridgePreferencesImport.run(config.importBridgeHistory(),inProcessDir,currentProfile(),blockedItems,
+        new BridgePreferencesImport.Config(){
+          public String get(String profile,String key){return profile==null?cm.getConfiguration(CONFIG_GROUP,key):cm.getConfiguration(CONFIG_GROUP,profile,key);}
+          public void set(String profile,String key,String value){if(profile==null)cm.setConfiguration(CONFIG_GROUP,key,value);else cm.setConfiguration(CONFIG_GROUP,profile,key,value);}
+        },inProcessProfitSince,text->gson.fromJson(text,JsonElement.class),System.currentTimeMillis(),m->log.info(m),preferencesImportLogged);
+      if(r!=null && r.profitSince!=null)inProcessProfitSince=r.profitSince; // stored by the import; the engine reads this field
+    } catch(Exception ex){log.warn("EVI: the preferences import did not complete",ex);}
+  }
+  /** Redraws the sidebar's Blocked items list from this character's stored list (any thread). Names come from
+   *  the item list the price layer already holds, never from a request; an item it does not know is named by its id. */
+  void refreshBlockedSection() {
+    EviLivePanel pl=panel;
+    if(pl==null)return;
+    String p=currentProfile();
+    List<Integer> ids=p==null?Collections.emptyList():blockedItems.all(p);
+    com.evi.live.market.ItemCatalog cat=null;
+    try{PriceDataService pd=prices;cat=pd==null?null:pd.snapshot().catalog;}catch(Exception ignored){}
+    List<EviLivePanel.BlockedRow> rows=new ArrayList<>();
+    for(int id:ids) {
+      com.evi.live.market.ItemCatalog.Item it=cat==null?null:cat.get(id);
+      rows.add(new EviLivePanel.BlockedRow(id,it==null||it.name==null||it.name.isEmpty()?"Item "+id:it.name));
+    }
+    pl.blockedItems(rows);
   }
   // Called only from the sidebar's "I took this one" button (Swing EDT). Records that the player
   // actually acted on this exact suggestion, which is the only thing that lets EVI honestly say what
@@ -980,19 +1175,19 @@ public class EviLivePlugin extends Plugin {
     if(s==null||s.id==null||s.id.isEmpty())return;
     final boolean nowAccepted=!s.accepted;
     s.accepted=nowAccepted;
-    // Remembered LOCALLY until the bridge echoes the same answer for this id. Without it the press
+    // Remembered LOCALLY until the engine's answer echoes the same for this id. Without it the press
     // races the two-second poll: a poll already in flight when the button is clicked returns the
-    // suggestion with accepted=false, because the bridge has not been told yet, and
+    // suggestion with accepted=false, because the record has not been written yet, and
     // updatePanelSuggestion resets the button. The player sees their click not register, presses
     // again, and the second press posts accepted:false -- silently undoing the acceptance they just
     // made. That corrupts the one observation this whole feature exists to produce.
     pendingAccept.put(s.id,nowAccepted);
     if(panel!=null)panel.actions(true,nowAccepted,"sell".equals(s.action),
       "sell".equals(s.action)&&s.buyId!=null&&!s.buyId.isEmpty(),"buy".equals(s.action));
-    String key=pluginKey;final String id=s.id;final int itemId=s.itemId;
-    if(running && sender!=null && key!=null)sender.execute(()->{
-      try{transport.markAccepted(key,gson.toJson(new AcceptRequest(id,itemId,nowAccepted)));}catch(Exception ignored){}
-    });
+    final String id=s.id;final int itemId=s.itemId;
+    // The plugin records the press itself (SuggestionRecords), off the Swing thread.
+    SuggestionRecords records=suggestionRecords;final String acct=account;
+    if(running && sender!=null && records!=null)sender.execute(()->records.accept(id,acct,itemId,nowAccepted,System.currentTimeMillis()));
   }
   // Called only from the sidebar's "Personal use" button (Swing EDT). For supplies bought via the
   // GE for the player's own use rather than to flip -- e.g. buying cannonballs to actually fire
@@ -1017,21 +1212,47 @@ public class EviLivePlugin extends Plugin {
       return;
     }
     // A sell suggestion with no buy behind it comes from the idle-inventory setting: gear EVI only
-    // sees in the inventory and never watched being bought (reported live for a Masori body (f) worn
-    // while training Slayer). There is no purchase to mark, so the item itself is excluded instead --
+    // sees in the inventory and never watched being bought (reported live for a piece of gear a player
+    // was wearing). There is no purchase to mark, so the item itself is excluded instead --
     // the bridge keys that by item and applies it only to that same idle-inventory tier, so EVI will
     // still suggest buying the item to flip. Before this, the button correctly refused to mark
     // anything and the suggestion simply came back on the next poll.
-    String key=pluginKey,buyId=s.buyId==null||s.buyId.isEmpty()?null:s.buyId;
-    skippedItemIds.add(s.itemId);
-    heldForResale.remove(s.itemId);
+    markPersonalUse(s.itemId,s.buyId==null||s.buyId.isEmpty()?null:s.buyId);
+  }
+  // A holding LINE's menu: "Personal use" (Swing EDT). The lines under Active offers state what this account holds
+  // (holdingsAdvice); since 8 Oct 2026 each carries its lot's buyId, and the menu marks THAT purchase exactly as the card's
+  // Personal use button marks the card's -- the same journal write, the same sentences. One line is one lot, so a second lot
+  // of the same item is its own line and is not touched. A line with no lot has no menu; nothing here guesses one.
+  void holdingLinePersonalUse(AdviceCard c) {
+    if(c==null || c.buyId==null)return;
+    markPersonalUse(c.itemId,c.buyId);
+  }
+  // A holding LINE's menu: "I don't have this anymore" (Swing EDT) -- the card's Gone, for that line's lot. See above.
+  void holdingLineGone(AdviceCard c) {
+    if(c==null || c.buyId==null)return;
+    markNotHeld(c.itemId,c.buyId);
+  }
+  // What the card's Personal use does once it knows the item and the buy (null: an idle-stock item mark), shared with the
+  // holding lines' menu so the two can never drift apart.
+  private void markPersonalUse(final int itemId, final String buyId) {
+    skippedItemIds.add(itemId);
+    heldForResale.remove(itemId);
     suggestionCache.set(null);
-    updatePanelSuggestion(null,buyId==null
+    // The plugin's own journal records the mark (PluginJournal.markPersonalUse / markPersonalUseItem). An item mark takes its
+    // kept count from the engine (InProcessEngine.keptFor), naming the presser: the bag the idle-stock tier read for this
+    // account under a minute ago -- else the blanket mark.
+    PluginJournal j=journal;final String acct=account;final InProcessEngine engine=inProcess;
+    final boolean canSave=j!=null && (buyId!=null || com.evi.live.journal.Packet.id(acct));
+    updatePanelSuggestion(null,!canSave
+      ?"Set aside for this session only: EVI could not save the mark just now. Checking for the next suggestion..."
+      :buyId==null
       ?"Marked as yours, not stock. EVI won't suggest selling it again. Checking for the next suggestion..."
       :"Marked as personal use. Checking for the next suggestion...");
-    final int itemId=s.itemId;
     if(running && sender!=null)sender.execute(()->{
-      if(key!=null){try{transport.markPersonalUse(key,gson.toJson(buyId==null?PersonalUseRequest.forItem(itemId):new PersonalUseRequest(buyId)));}catch(Exception ignored){}}
+      if(canSave){
+        if(buyId==null)j.markPersonalUseItem(acct,itemId,engine==null?null:engine.keptFor(acct,itemId,System.currentTimeMillis()));
+        else j.markPersonalUse(acct,buyId);
+      }
       pollSuggestion(lifecycle);
     });
   }
@@ -1052,13 +1273,20 @@ public class EviLivePlugin extends Plugin {
       if(panel!=null)panel.suggestion("\"I don't have this anymore\" only applies to a \"you're holding this\" suggestion EVI can trace back to one specific buy.");
       return;
     }
-    String key=pluginKey,buyId=s.buyId;
-    skippedItemIds.add(s.itemId);
-    heldForResale.remove(s.itemId);
+    markNotHeld(s.itemId,s.buyId);
+  }
+  // What the card's Gone does once it knows the item and the buy, shared with the holding lines' menu.
+  private void markNotHeld(final int itemId, final String buyId) {
+    skippedItemIds.add(itemId);
+    heldForResale.remove(itemId);
     suggestionCache.set(null);
-    updatePanelSuggestion(null,"Marked as no longer held. Checking for the next suggestion...");
+    // The plugin's own journal records the close (PluginJournal.closePosition, "sold-untracked").
+    PluginJournal j=journal;final String acct=account;
+    updatePanelSuggestion(null,j==null
+      ?"Set aside for this session only: EVI could not save the mark just now. Checking for the next suggestion..."
+      :"Marked as no longer held. Checking for the next suggestion...");
     if(running && sender!=null)sender.execute(()->{
-      if(key!=null){try{transport.markNotHeld(key,gson.toJson(new NotHeldRequest(buyId)));}catch(Exception ignored){}}
+      if(j!=null)j.closePosition(acct,buyId);
       pollSuggestion(lifecycle);
     });
   }
@@ -1078,21 +1306,26 @@ public class EviLivePlugin extends Plugin {
     if(config.marginSafetyCushion()){if(q.length()>0)q.append('&');q.append("cushion=1");}
     String blocklist=sanitizeBlocklist(config.itemBlocklist());
     if(!blocklist.isEmpty()){if(q.length()>0)q.append('&');q.append("blocklist=").append(blocklist);}
-    RiskLevel risk=config.riskLevel();
+    // riskLevelV2, NEVER the retired riskLevel: a High stored under the old key (which only ever tuned
+    // the history tier) must not leak into the new meaning. Everyone starts at Low on the new key.
+    // While the levels are hidden (RiskLevel.SHOWN false, 7 Oct 2026) nothing is read here at all: a Medium or High
+    // stored while the buttons were visible must not keep steering suggestions from a setting nobody can see.
+    RiskLevel risk=riskLevelsShown?config.riskLevelV2():RiskLevel.LOW;
     // Left off only for LOW, which is now the bridge's own default -- so Medium is sent explicitly,
     // and choosing it still means Medium rather than silently falling back to the new default.
     if(risk!=null && risk!=RiskLevel.LOW){if(q.length()>0)q.append('&');q.append("risk=").append(risk.param());}
-    if(config.includeMarketSuggestions()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
+    // includeMarketWide, never the retired includeMarketSuggestions (see EviLiveConfig for why the key moved).
+    if(config.includeMarketWide()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
     // How much of the cash stack one market-wide suggestion may commit (see MaxTradeShare for the
     // backtest that produced the default). OFF is left off the query entirely, like every other
     // setting here, so it behaves exactly as before this existed.
-    // Which market-wide candidates to consider at all (see TradingProfile); STANDARD sends nothing.
-    TradingProfile profile=config.tradingProfile();
-    if(profile!=null && profile.param()!=null){if(q.length()>0)q.append('&');q.append("profile=").append(profile.param());}
+    // No profile= is ever sent (6 Oct 2026). The Starter profile restricted market-wide picks to
+    // untaxed items; it is retired and hidden, and a STARTER still stored from an older version is
+    // deliberately NOT read here, so nobody stays on it by accident. The bridge still accepts
+    // profile=starter from older plugins; this one simply never asks for it.
     MaxTradeShare share=config.maxTradeShare();
     if(share!=null && share.percent()>0){if(q.length()>0)q.append('&');q.append("stackShare=").append(share.percent());}
-    // Gear, bulk or all (see SuggestionFocus); "Same as scanner" sends nothing and the bridge uses the
-    // scanner's own Focus switch.
+    // Gear, bulk or all items (see SuggestionFocus); All items, the default since 4.0.0, sends nothing: the engine takes any item.
     SuggestionFocus focus=config.suggestionFocus();
     if(focus!=null && focus.param()!=null){if(q.length()>0)q.append('&');q.append("focus=").append(focus.param());}
     SuggestionSource source=config.suggestionSource();
@@ -1110,10 +1343,10 @@ public class EviLivePlugin extends Plugin {
     // hidden and no longer read.
     TradePace pace=config.tradePace();
     if(pace!=null && pace.minutes()>0){if(q.length()>0)q.append('&');q.append("duration=").append(pace.minutes());}
-    // Price-direction forecast for a "buy" suggestion (see ForecastHorizon/ForecastPolicy). Both
-    // left off entirely when forecastHorizon is OFF (the default), so an untouched config costs no
-    // extra bridge-side Wiki API call and changes nothing -- same treatment as every setting above.
-    ForecastHorizon horizon=config.forecastHorizon();
+    // The Exit-risk check before a "buy" suggestion (see ForecastHorizon/ForecastPolicy; keyName exitRiskCheck since 4.0.0).
+    // Both left off entirely when it is OFF (the default), so an untouched config costs no extra archive read and changes
+    // nothing -- same treatment as every setting above.
+    ForecastHorizon horizon=config.exitRiskCheck();
     if(horizon!=null && horizon.param()!=null) {
       if(q.length()>0)q.append('&');q.append("forecast=").append(horizon.param());
       ForecastPolicy policy=config.forecastPolicy();
@@ -1167,6 +1400,9 @@ public class EviLivePlugin extends Plugin {
     // iteration order.
     Set<Integer> exclude=new TreeSet<>(activeSlotItemIds);
     exclude.addAll(skippedItemIds);
+    // This account's Skips from the last four hours. Unlike the session set above, reset() does not
+    // touch these: a world hop is not the player changing their mind.
+    exclude.addAll(skipMemory.active());
     // Held back for this poll only, so the bridge moves on to its next candidate instead of
     // repeating one we already know we cannot verify. Cleared on the next inventory change.
     exclude.addAll(unverifiableItemIds);
@@ -1287,11 +1523,49 @@ public class EviLivePlugin extends Plugin {
   // anything, so saying "nothing passes your settings" would be plainly wrong -- the settings were
   // never consulted. Negative counts mean "not known yet" and change nothing.
   static String noSuggestionMessage(boolean includeMarket, boolean cushion, int freeSlots, int collectableSlots) {
+    return noSuggestionMessage(includeMarket,cushion,freeSlots,collectableSlots,null);
+  }
+  // THREE tiers can be switched off, and this must not claim it checked one that was. The slot
+  // case below already encoded exactly that principle -- "the settings were never consulted" --
+  // and the SOURCE case was missed, which cost a real diagnosis on 4 Oct 2026: with Suggest from
+  // = Market only the panel said "neither your reviewed flips nor a market-wide pick" and then
+  // blamed the minimum profit, while the history tier it named had been skipped BY INSTRUCTION
+  // and a qualifying pick was sitting in it. The advice it gave -- lower your
+  // minimum -- was the WORSE of the two available fixes. Same family as "Bridge unreachable" for
+  // a rejected key: confident wording pointing at the one setting that was working.
+  //
+  // A null source means the default (history first), which consults both, so nothing changes for
+  // anyone who never touched the setting.
+  static String noSuggestionMessage(boolean includeMarket, boolean cushion, int freeSlots, int collectableSlots, SuggestionSource source) {
+    // A COUNT, not the hard-coded eight: free-to-play has three slots, so naming eight there states
+    // a number the player can see is wrong. Negative means "not known yet" and changes nothing.
     if(freeSlots==0 && collectableSlots==0)
-      return "All 8 Grand Exchange slots are in use, so there is nowhere to place another offer. EVI will suggest again as soon as one frees up.";
-    String base=includeMarket
-      ?"Nothing passes your settings right now -- neither your reviewed flips nor a market-wide pick."
-      :"No eligible reviewed flip is currently profitable. (Market-wide suggestions are off.)";
+      return "Every Grand Exchange slot is in use, so there is nowhere to place another offer."
+        +" EVI will suggest again as soon as one frees up.";
+    // The TOGGLE is checked before the source, and the order is the whole fix (6 Oct 2026). Checked
+    // the other way round, Market only with the toggle off said "No market-wide pick passes your
+    // settings" about a market check that never ran -- the bridge runs neither the history tier
+    // (Market only) nor the market tier (toggle off), so nothing was searched at all, and the
+    // sentence pointed at the settings rather than at the switch. Plain words throughout: the old
+    // "reviewed flip" meant nothing to a new player, and with market-wide on by default the
+    // both-tiers sentence is the one a new player now meets most.
+    // Nothing was searched, so the margin check never ran either: no cushion clause here, the same
+    // rule as the full-GE case above.
+    if(!includeMarket && source==SuggestionSource.MARKET_ONLY)
+      return "Market-wide suggestions are switched off and \"Suggest from\" is set to Market only, so EVI"
+        +" has nowhere to look for a trade. Turn on \"Include market-wide suggestions\" to get suggestions.";
+    String base;
+    if(!includeMarket)
+      // "passes your settings", not "worth flipping": the bar applied is the player's own (minimum
+      // profit and the rest), so the sentence must not imply EVI judged the items unprofitable.
+      base="Nothing in your own trade history passes your settings right now, and market-wide suggestions"
+        +" are switched off. Turn on \"Include market-wide suggestions\" to search the whole Grand Exchange.";
+    else if(source==SuggestionSource.MARKET_ONLY)
+      // Your history was not consulted, so do not mention it -- and name the lever that would.
+      base="No market-wide pick passes your settings right now. \"Suggest from\" is set to Market only,"
+        +" so your own trade history was not considered -- switch it to include that too.";
+    else
+      base="Nothing passes your settings right now -- neither your own trade history nor a market-wide pick.";
     return cushion
       ?base+" \"Require margin above price noise\" is on, and it currently skips most candidates -- turn it off to see them."
       :base;
@@ -1331,7 +1605,7 @@ public class EviLivePlugin extends Plugin {
     // the behaviour the icon row was built to remove.
     boolean holding="sell".equals(s.action), buying="buy".equals(s.action);
     boolean canForget=holding&&s.buyId!=null&&!s.buyId.isEmpty();
-    // A local press outranks the bridge until the bridge agrees, so an in-flight poll cannot undo it.
+    // A local press outranks the engine's answer until the answer agrees, so an in-flight poll cannot undo it.
     Boolean pending=s.id==null?null:pendingAccept.get(s.id);
     boolean accepted=pending!=null?pending:s.accepted;
     if(pending!=null&&pending==s.accepted)pendingAccept.remove(s.id);
@@ -1422,26 +1696,58 @@ public class EviLivePlugin extends Plugin {
   // apply to the same offer at once. A linear scan, not a map -- there are at most 8 GE slots, so
   // this is always trivially small. Never throws on a missing/short slotPrices/slotFill array;
   // simply skips any offer with no match.
-  private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice) {
+  private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice,
+                                    Map<String,Long> sellBreakEven) {
     if(panel==null)return;
     if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
+    java.util.List<AdviceCard> cards=offerCards(offers,slotPrices,slotFill,relistAdvice,sellBreakEven,true);
+    // Announce a NEW warning through RuneLite's own notifier, for the hold times where nobody is
+    // looking at the sidebar. Recorded only after notifying, so a throw cannot silence it for ever.
+    for(AdviceCard c:cardsToNotify(cards,config.notifyAdvice(),announcedAdvice)) {
+      try { notifier.notify("EVI: "+c.label+" -- "+c.name); } catch(Exception ignored) { }
+      announcedAdvice.add(adviceKey(c));
+    }
+    // A warning that has gone must be able to fire again if it returns.
+    announcedAdvice.retainAll(currentAdviceKeys(cards));
+    panel.advice(cards);
+  }
+  /**
+   * The cards under "Active offers": the engine's advice first, then the plugin's own price-drift and fill hints per running
+   * offer. Pure, so the one-voice rule is tested directly.
+   *
+   * <p>ONE VOICE PER OFFER, with the engine in this process ({@code oneVoice}, always true in the plugin since 4.0.0). The 5%
+   * hand-off between the old companion app's relist advice and offerDriftHint existed only because they were two processes;
+   * here both speakers are known,
+   * so a SELL offer gets exactly one price sentence:
+   * <ul>
+   *   <li>the relist card when the engine wrote one for that item (above break-even it speaks under 5% or past its clock, so the
+   *       hand-off at 5% stays exact; below break-even it speaks whatever the gap and names the loss);</li>
+   *   <li>otherwise, below break-even ({@code sellBreakEven}, what this account paid, after tax) the plugin stays quiet too: its
+   *       "or take the current price" would lock in the loss the relist sentence exists to name -- that sentence speaks once
+   *       the offer has stood 15 minutes;</li>
+   *   <li>otherwise the plugin's own drift hint, past 5%, exactly as before.</li>
+   * </ul>
+   * A BUY offer has no relist voice (relist advice is about sells), so its drift hint is unchanged. The fill hint is a
+   * different subject (pace, not price) and already has its own hand-off (the engine's buy-progress notes skip an item the
+   * fill hint speaks about). With {@code oneVoice} false (the companion app's rule, kept for the tests that pin the difference)
+   * the drift hint speaks whatever the relist advice says.
+   */
+  static java.util.List<AdviceCard> offerCards(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice,
+                                               Map<String,Long> sellBreakEven, boolean oneVoice) {
     java.util.List<AdviceCard> cards=new java.util.ArrayList<>();
-    // The out-of-date notice is NOT a card. It was one until the maintainer asked for it under the connection
-    // line on 1 Oct 2026, and they were right: an advice card is about an offer, and this is about
-    // the connection the whole panel depends on. Putting it in the list also meant it competed with
-    // actual trades for the top slot every poll.
-    panel.staleBridge(bridgeOutOfDate(bridgeApi,!keyRejected)?bridgeOutOfDateMessage():null);
     // Shown first: an offer that has been sitting is the thing most worth acting on.
     if(relistAdvice!=null)for(RelistAdvice advice:relistAdvice) {
       if(advice==null || advice.message==null || advice.message.isEmpty())continue;
-      cards.add(new AdviceCard(advice.level,advice.label,advice.name,advice.figures,advice.message));
+      // A holding line keeps its lot, so the panel can offer Personal use / Gone on it; no other note carries one.
+      cards.add(new AdviceCard(advice.level,advice.label,advice.name,advice.figures,advice.message,advice.itemId,
+        Boolean.TRUE.equals(advice.holding)?advice.buyId:null,advice.detail));
     }
     for(ActiveOffer o:offers) {
       Suggestion price=null;
       if(slotPrices!=null)for(Suggestion p:slotPrices)if(p!=null && p.itemId==o.itemId){price=p;break;}
       OfferFillEstimate fill=null;
       if(slotFill!=null)for(OfferFillEstimate f:slotFill)if(f!=null && f.itemId==o.itemId){fill=f;break;}
-      String priceHint=offerDriftHint(o,price);
+      String priceHint=oneVoice&&!o.buying&&relistSpeaks(o.itemId,price,relistAdvice,sellBreakEven)?null:offerDriftHint(o,price);
       String fillHint=offerFillHint(o,fill);
       // The sentences are unchanged and still carry every figure; the card is a short way in, and the
       // sentence is one hover away. A drift the player can act on for free is the cheaper warning, so
@@ -1453,7 +1759,15 @@ public class EviLivePlugin extends Plugin {
       if(fillHint!=null)cards.add(new AdviceCard("caution","May not fill in time",o.name,
         offerFillFigures(o,fill),fillHint));
     }
-    panel.advice(cards);
+    return cards;
+  }
+  /** The one-voice rule for a SELL offer (see offerCards): true when the relist advice is this offer's price voice --
+   *  it wrote a card for the item, or the market is under this account's break-even (where the plugin's own hint would say
+   *  "take the current price"). A relist card is recognised by its own field, offerPrice, which only relist notes carry. */
+  static boolean relistSpeaks(int itemId, Suggestion price, RelistAdvice[] relistAdvice, Map<String,Long> sellBreakEven) {
+    if(relistAdvice!=null)for(RelistAdvice a:relistAdvice)if(a!=null && a.itemId==itemId && a.offerPrice!=null)return true;
+    Long breakEven=sellBreakEven==null?null:sellBreakEven.get(String.valueOf(itemId));
+    return breakEven!=null && price!=null && price.sellPrice>0 && price.sellPrice<breakEven;
   }
   // price and spent are LONG, not int. RuneLite 1.13.0 widened GrandExchangeOffer.getPrice() and
   // getSpent() to long, and the Plugin Hub compiles every plugin against the version it pins -- so
@@ -1486,7 +1800,10 @@ public class EviLivePlugin extends Plugin {
   // lookupItemPrice in suggestions.mjs), and Gson populates only those three fields of a Suggestion,
   // leaving the rest (action, reasoning, etc.) at their defaults. See offerDriftHint for how these
   // get matched back up against activeOffers by itemId.
-  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] additional;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;Profit profit;Reachable reachable;}
+  static class SuggestionResponse {Suggestion suggestion,openItemPrice;Suggestion[] additional;Suggestion[] slotPrices;OfferFillEstimate[] slotFill;RelistAdvice[] relistAdvice;SlotState slots;Profit profit;Reachable reachable;
+    // Sent by the plugin's own engine: the break-even sell price of each of this account's live sells whose cost basis is
+    // known, keyed by item id, for the one-voice rule (see offerCards). Null when the answer carries none.
+    Map<String,Long> sellBreakEven;}
   // Sent only when there is nothing to suggest AND a minimum profit is set: the best trade the
   // market actually offers at this cash stack, so "nothing" can say why instead of looking broken.
   // It is a statement of what exists, not a recommendation -- it has been through none of EVI's
@@ -1506,14 +1823,74 @@ public class EviLivePlugin extends Plugin {
   // bridge from its own journal (see bridge/relist.mjs). `message` is already a complete, hedged
   // sentence naming the market price and, when the cost basis is known, the break-even price; the
   // plugin only displays it. Nothing here relists, cancels or edits anything -- the player does.
-  static final class RelistAdvice {int itemId;String name,message,level,label,figures;boolean belowBreakEven;}
+  static final class RelistAdvice {int itemId;String name,message,level,label,figures;boolean belowBreakEven;
+    // A short message's tooltip (8 Oct 2026: crash notes). Absent from an older engine: the message is the tooltip, as before.
+    String detail;
+    // holdingsAdvice's lines only (8 Oct 2026): holding true, and the lot's buy offer id -- what the line menu marks.
+    Boolean holding;String buyId;
+    // Only relist notes carry it (the other advice modules' notes are trimmed to the card fields): how offerCards tells a
+    // relist card from the rest.
+    Double offerPrice;}
   /** One line of advice about an offer already placed, as something the sidebar can draw rather than a
    *  paragraph to read. `message` is the full sentence and stays as the tooltip, so making the card
    *  small costs no explanation. `label` absent means an older bridge: the panel shows the sentence. */
+  /** A stable identity for one warning about one item, so it is announced ONCE and not every poll. */
+  static String adviceKey(AdviceCard c) {
+    return c==null?"":(c.level+"|"+c.name+"|"+c.label);
+  }
+  /** The keys on screen now, so a warning that has cleared can fire again if it comes back. */
+  static java.util.Set<String> currentAdviceKeys(java.util.List<AdviceCard> cards) {
+    java.util.Set<String> keys=new java.util.HashSet<>();
+    if(cards!=null)for(AdviceCard c:cards)if(c!=null)keys.add(adviceKey(c));
+    return keys;
+  }
+  /**
+   * Which cards deserve a notification right now.
+   *
+   * WARN ONLY. The levels are warn / caution / info, and only warn means "this offer is costing you
+   * money" -- "may not fill in time" is a caution and does not deserve a sound. Starting narrow is
+   * deliberate: a notifier that cries wolf gets the whole plugin switched off.
+   *
+   * ANNOUNCED ONCE per condition per item. The plugin polls every two seconds, so without the
+   * dedupe a single standing offer would notify about 1,800 times an hour. The key deliberately
+   * excludes the message text, so a figure ticking inside the same warning does not re-fire it.
+   *
+   * Pure, and does NOT mutate the set -- the caller records what it announced.
+   */
+  static java.util.List<AdviceCard> cardsToNotify(java.util.List<AdviceCard> cards, boolean enabled, java.util.Set<String> announced) {
+    java.util.List<AdviceCard> out=new java.util.ArrayList<>();
+    if(!enabled || cards==null)return out;
+    for(AdviceCard c:cards) {
+      if(c==null || !"warn".equals(c.level))continue;
+      if(c.message==null || c.message.isEmpty())continue;
+      String k=adviceKey(c);
+      if(announced!=null && announced.contains(k))continue;
+      boolean dup=false;
+      for(AdviceCard seen:out)if(adviceKey(seen).equals(k))dup=true;
+      if(!dup)out.add(c);
+    }
+    return out;
+  }
   static final class AdviceCard {
     final String level, label, name, figures, message;
+    // A HOLDING line's lot (8 Oct 2026): the item and the buy offer id the engine named (holdingsAdvice's buyId). buyId is
+    // null on every other card -- an offer note, a crash note, the plugin's own hints -- and on a holding line from an engine
+    // that names no lot (a bridge older than this): the panel offers its line menu (Personal use, Gone) only where it is set.
+    final int itemId;
+    final String buyId;
+    // A note sent as a short line plus a tooltip detail (8 Oct 2026: crash notes): the panel draws `message` on the card and
+    // keeps `detail` for the tooltip. Null on every other card, whose tooltip is its message as before.
+    final String detail;
     AdviceCard(String level, String label, String name, String figures, String message) {
+      this(level,label,name,figures,message,0,null);
+    }
+    AdviceCard(String level, String label, String name, String figures, String message, int itemId, String buyId) {
+      this(level,label,name,figures,message,itemId,buyId,null);
+    }
+    AdviceCard(String level, String label, String name, String figures, String message, int itemId, String buyId, String detail) {
       this.level=level; this.label=label; this.name=name; this.figures=figures; this.message=message;
+      this.itemId=itemId; this.buyId=buyId==null||buyId.isEmpty()?null:buyId;
+      this.detail=detail==null||detail.isEmpty()?null:detail;
     }
   }
   // One entry per in-progress offer the bridge could judge against the player's own "Target trade
@@ -1525,23 +1902,4 @@ public class EviLivePlugin extends Plugin {
   // player has a target duration set; otherwise the bridge sends an empty array and this costs
   // nothing, exactly like slotPrices above it.
   static final class OfferFillEstimate {int itemId;boolean likelyToFillInTime;int estimatedFillMinutes;}
-  // Request body for POST /api/suggestion/personal-use (see flagPersonalUse and
-  // LocalTransport.markPersonalUse). personal defaults true -- this plugin only ever flags, never
-  // unflags, today; the field exists on the bridge side for a possible future undo.
-  // buyId marks one specific purchase; itemId (with no buyId) marks an item the player owns and uses,
-  // which is all the idle-inventory tier can offer -- see flagPersonalUse and Store.markPersonalUseItem.
-  // Request body for POST /api/suggestion/block (see blockSuggestion and LocalTransport.markBlocked).
-  static class BlockRequest {int itemId;boolean blocked=true;BlockRequest(int itemId){this.itemId=itemId;}}
-  // Request body for POST /api/suggestion/accept (see acceptSuggestion and LocalTransport.markAccepted).
-  // id is the bridge's own handle for the exact suggestion that was shown; itemId is sent only so the
-  // record is readable without joining it back to the log. accepted carries the undo.
-  static class AcceptRequest {String id;int itemId;boolean accepted;
-    AcceptRequest(String id,int itemId,boolean accepted){this.id=id;this.itemId=itemId;this.accepted=accepted;}}
-  static class PersonalUseRequest {String buyId;Integer itemId;boolean personal=true;
-    PersonalUseRequest(String buyId){this.buyId=buyId;}
-    static PersonalUseRequest forItem(int itemId){PersonalUseRequest r=new PersonalUseRequest(null);r.itemId=itemId;return r;}}
-  // Request body for POST /api/suggestion/not-held (see flagNotHeld and LocalTransport.markNotHeld).
-  // reason mirrors Store.closePosition's own two values; the sidebar offers the general "gone some
-  // way EVI couldn't see" case, which is sold-untracked.
-  static class NotHeldRequest {String buyId;String reason="sold-untracked";NotHeldRequest(String buyId){this.buyId=buyId;}}
 }

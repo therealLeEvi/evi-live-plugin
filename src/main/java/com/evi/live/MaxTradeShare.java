@@ -6,7 +6,7 @@ package com.evi.live;
  * query string entirely, so choosing it restores exactly the behaviour from before this existed.
  *
  * This is the one setting here chosen from measured evidence rather than judgement. Replaying 90
- * days of archived prices through EVI's own market-wide ranking (tools/backtest.mjs, 352 simulated
+ * days of archived prices through EVI's own market-wide ranking (a replay of 352 simulated
  * decisions) found that tier would have lost ~93m gp -- and that the losses were not bad item
  * picks but bad sizing: every large loss was a single expensive item bought with nearly the whole
  * stack and still unsold a day later (Hallowfell x8 for 48.5m, Robin Hood hat x4 for 45.5m). Capping
