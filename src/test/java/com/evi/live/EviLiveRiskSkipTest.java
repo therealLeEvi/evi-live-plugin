@@ -108,6 +108,11 @@ public final class EviLiveRiskSkipTest {
     check(fresh.active().equals(new java.util.TreeSet<>(java.util.Arrays.asList(5,6))),"...and is read again on the next");
     check(fresh.skip(8)&&store.byProfile.get("rsprofile.accountA").contains("5:")&&store.byProfile.get("rsprofile.accountA").contains("8:"),
       "a Skip once it reads adds to the list: "+store.byProfile.get("rsprofile.accountA"));
+    failNext[0]=true;
+    SkipMemory clearing=new SkipMemory(flaky,clock::get);
+    clearing.clear();
+    check(!store.byProfile.containsKey("rsprofile.accountA")&&clearing.active().isEmpty(),
+      "Show skipped items again clears the list even when it could not be read just then: "+store.byProfile.get("rsprofile.accountA"));
   }
   static EviLivePlugin skipPlugin(FakeStore store,AtomicLong clock)throws Exception {
     EviLivePlugin p=new EviLivePlugin();

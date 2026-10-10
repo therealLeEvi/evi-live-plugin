@@ -91,8 +91,9 @@ final class SkipMemory {
   synchronized void clear() {
     String profile = profile();
     if (profile == null) return;
-    if (!load(profile)) return;
-    until.clear();
+    // nothing to read first: the list goes whatever it held, so an unreadable one cannot stop the press (review, 10 Oct)
+    until = new TreeMap<>();
+    loadedFor = profile;
     store.write(profile, "");
   }
 

@@ -1704,12 +1704,7 @@ public class EviLivePlugin extends Plugin {
   private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice,
                                     Map<String,Long> sellBreakEven) {
     if(panel==null)return;
-    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){
-      // nothing left to warn about: forget every warning, so one that returns notifies again (review, 10 Oct)
-      announcedAdvice.clear();
-      panel.advice(java.util.Collections.emptyList());
-      return;
-    }
+    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
     java.util.List<AdviceCard> cards=offerCards(offers,slotPrices,slotFill,relistAdvice,sellBreakEven,true);
     // Announce a NEW warning through RuneLite's own notifier, for the hold times where nobody is
     // looking at the sidebar. Recorded only after notifying, so a throw cannot silence it for ever.
