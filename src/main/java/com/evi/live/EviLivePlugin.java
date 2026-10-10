@@ -139,6 +139,7 @@ public class EviLivePlugin extends Plugin {
   static final String IN_PROCESS_WAITING="Waiting for prices from the OSRS Wiki.";
   /** The suggestion card while buys wait for the price history and nothing else applies. ASCII. */
   static final String BUYS_PAUSED="Buy suggestions are paused while EVI loads price history (progress below).";
+  static final String BUYS_PAUSED_STALE="Buy suggestions are paused: the latest prices are too old to quote from (see below).";
   /** How long a helper thread (never the client thread) waits for the sender after shutDown before logging that it is still busy. */
   static final long SENDER_STOP_WAIT_MS=10_000;
   private String salt,profile,account,session,economy;
@@ -182,9 +183,10 @@ public class EviLivePlugin extends Plugin {
     public String profileKey(){ConfigManager cm=configManager;return cm==null?null:cm.getRSProfileKey();}
     // Both guard on the profile STILL being current: RuneLite's RS-profile calls always address the
     // current account, so a profile that changed between lookup and use must read and write nothing.
+    // A read THROWS then rather than answering "nothing stored", which SkipMemory would otherwise cache.
     public String read(String profile){
       ConfigManager cm=configManager;
-      if(cm==null || !profile.equals(cm.getRSProfileKey()))return null;
+      if(cm==null || !profile.equals(cm.getRSProfileKey()))throw new IllegalStateException("profile changed");
       return cm.getRSProfileConfiguration(CONFIG_GROUP,SkipMemory.CONFIG_KEY);
     }
     public void write(String profile,String value){
@@ -964,15 +966,18 @@ public class EviLivePlugin extends Plugin {
   /** The status line (when the Wiki prices last arrived) and the price-history line, from one answer. */
   private void showInProcessStatus(InProcessEngine.Answer answer) {
     if(answer==null)return;
-    status(inProcessStatus(answer.latestFetchedAtMs));
+    status(inProcessStatus(answer.latestFetchedAtMs,System.currentTimeMillis()));
     EviLivePanel p=panel;
     if(p!=null)p.backfillNotice(answer.backfillLine);
   }
-  /** The engine's status line. "Connected" only once prices have actually arrived (the dot turns green on it). */
-  static String inProcessStatus(long latestFetchedAtMs) {
+  /** The engine's status line. "Connected" only once prices have actually arrived (the dot turns green on it), and only while
+   *  they keep arriving: past InProcessEngine.STALE_PRICES_MS it says when they last did, and the dot is not green (review, 10 Oct). */
+  static String inProcessStatus(long latestFetchedAtMs,long now) {
     if(latestFetchedAtMs<=0)return IN_PROCESS_WAITING;
-    return "Connected to OSRS Wiki prices. Last update: "+java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss",java.util.Locale.US)
+    String at=java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss",java.util.Locale.US)
       .format(java.time.Instant.ofEpochMilli(latestFetchedAtMs).atZone(java.time.ZoneId.systemDefault()));
+    if(InProcessEngine.pricesStale(latestFetchedAtMs,now))return "OSRS Wiki prices last arrived at "+at+".";
+    return "Connected to OSRS Wiki prices. Last update: "+at;
   }
   private void pollSuggestion(long generation) {
     if(!running || generation!=lifecycle)return;
@@ -1017,7 +1022,7 @@ public class EviLivePlugin extends Plugin {
       InProcessEngine.Answer used=answer;
       String diagnosis=used!=null&&!used.buysReady
         // the buy tiers were not asked at all, so neither "nothing passes" nor the slot reserve is the reason
-        ?BUYS_PAUSED
+        ?(used.pricesStale?BUYS_PAUSED_STALE:BUYS_PAUSED)
         :r!=null&&r.slots!=null&&r.slots.buysHeldForExits
         ?sellReserveMessage(r.slots.sellSlotsOwed)
         :noSuggestionMessage(config.includeMarketWide(),config.marginSafetyCushion(),freeSlots,collectableSlots,config.suggestionSource())
@@ -1699,7 +1704,12 @@ public class EviLivePlugin extends Plugin {
   private void updatePanelOfferHint(List<ActiveOffer> offers, Suggestion[] slotPrices, OfferFillEstimate[] slotFill, RelistAdvice[] relistAdvice,
                                     Map<String,Long> sellBreakEven) {
     if(panel==null)return;
-    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){panel.advice(java.util.Collections.emptyList());return;}
+    if(offers.isEmpty() && (relistAdvice==null || relistAdvice.length==0)){
+      // nothing left to warn about: forget every warning, so one that returns notifies again (review, 10 Oct)
+      announcedAdvice.clear();
+      panel.advice(java.util.Collections.emptyList());
+      return;
+    }
     java.util.List<AdviceCard> cards=offerCards(offers,slotPrices,slotFill,relistAdvice,sellBreakEven,true);
     // Announce a NEW warning through RuneLite's own notifier, for the hold times where nobody is
     // looking at the sidebar. Recorded only after notifying, so a throw cannot silence it for ever.

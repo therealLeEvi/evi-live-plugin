@@ -355,6 +355,25 @@ public final class EviLiveInProcessWiringTest {
     CompletableFuture.runAsync(() -> { }, CompletableFuture.delayedExecutor(600, TimeUnit.MILLISECONDS)).get();
     call(late.plugin, "pollSuggestion", new Class<?>[]{long.class}, 1L);
     check(((SuggestionCache) get(late.plugin, "suggestionCache")).get() != null && asked.get() == 2, "the late answer is shown on the next poll");
+
+    // an answer slower than REUSE_MS is still shown: it is timed from its ARRIVAL, not from the poll that asked (review, 10 Oct)
+    AtomicLong clk = new AtomicLong(1_000);
+    CompletableFuture<InProcessEngine.Answer> slow = new CompletableFuture<>();
+    AtomicLong slowAsks = new AtomicLong();
+    InProcessTransport slowT = new InProcessTransport((q, at) -> slowAsks.incrementAndGet() == 1 ? slow : new CompletableFuture<>(), clk::get);
+    check(slowT.get("q") == null && slowT.lastGetStatus() == InProcessTransport.PENDING, "the slow answer is not in yet");
+    clk.addAndGet(InProcessTransport.REUSE_MS + 5_000);
+    slow.complete(new InProcessEngine.Answer("q", body, null, null, true, 1_000));
+    check(body.equals(slowT.get("q")), "an answer that took longer than REUSE_MS is shown on the next poll, not dropped as stale on landing");
+    clk.addAndGet(InProcessTransport.REUSE_MS + 1);
+    check(slowT.get("q") == null, "and it still ages out REUSE_MS after it landed");
+
+    // the status line stops saying "Connected" (and the dot stops being green) once the prices are stale (review, 10 Oct)
+    long got = 1_000_000_000L;
+    check(EviLivePlugin.inProcessStatus(got, got + 60_000L).startsWith("Connected to OSRS Wiki prices. Last update: "), "fresh: connected");
+    String old = EviLivePlugin.inProcessStatus(got, got + InProcessEngine.STALE_PRICES_MS + 1);
+    check(old.startsWith("OSRS Wiki prices last arrived at ") && !old.startsWith("Connected"), "stale: says when they last arrived, not connected: " + old);
+    check(EviLivePlugin.inProcessStatus(0, got).equals(EviLivePlugin.IN_PROCESS_WAITING), "none yet: waiting");
   }
 
   // ------------------------------------------------------------------------------------------- 4. one voice per offer

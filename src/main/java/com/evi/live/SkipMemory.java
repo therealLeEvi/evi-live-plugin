@@ -45,7 +45,8 @@ final class SkipMemory {
   interface Store {
     /** The current RuneScape profile, or null when none is known (e.g. logged out). */
     String profileKey();
-    /** The stored value for that profile, or null/empty for none. */
+    /** The stored value for that profile, or null/empty for none. THROWS when it cannot be read (e.g. the profile is no
+     *  longer current): "unreadable" must never look like "nothing stored", or the next Skip would write over the list. */
     String read(String profile);
     /** Replaces the stored value for that profile; an empty string removes it. */
     void write(String profile, String value);
@@ -68,7 +69,7 @@ final class SkipMemory {
     String profile = profile();
     if (profile == null) return false;
     long now = clock.getAsLong();
-    load(profile);
+    if (!load(profile)) return false; // unreadable just now: a session-only skip, never a write over the stored list
     prune(now);
     until.put(itemId, now + SKIP_MILLIS);
     store.write(profile, format(until));
@@ -90,7 +91,7 @@ final class SkipMemory {
   synchronized void clear() {
     String profile = profile();
     if (profile == null) return;
-    load(profile);
+    if (!load(profile)) return;
     until.clear();
     store.write(profile, "");
   }
@@ -104,12 +105,23 @@ final class SkipMemory {
     }
   }
 
-  private void load(String profile) {
-    if (profile.equals(loadedFor)) return;
-    String raw = null;
-    try { raw = store.read(profile); } catch (Exception ignored) { }
+  /**
+   * Loads the profile's skips once. A read that FAILS is not cached (review, 10 Oct): it reads as no skips for this call and
+   * is tried again on the next, and returns false so a write does not replace the stored list with what little is in memory.
+   */
+  private boolean load(String profile) {
+    if (profile.equals(loadedFor)) return true;
+    String raw;
+    try {
+      raw = store.read(profile);
+    } catch (Exception unreadable) {
+      until = new TreeMap<>();
+      loadedFor = null;
+      return false;
+    }
     until = parse(raw);
     loadedFor = profile;
+    return true;
   }
 
   private void prune(long now) {

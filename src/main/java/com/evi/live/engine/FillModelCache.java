@@ -9,7 +9,8 @@ import java.util.List;
  * The player fill model as server.mjs's {@code playerFillModel} keeps it: rebuilt AT MOST HOURLY, from every journal offer
  * watched from placement (ANY account's -- the maintainer, 7 Oct: the fill model is the one deliberate exception to account scoping,
  * a timing estimate learned from more history), over the archived hours those offers fall in. Never fatal: a failed build
- * is remembered as "no model" for the hour, and the suggestion simply carries no fill sentence.
+ * gives "no model" and the suggestion simply carries no fill sentence. A failure is NOT kept: the next buy poll tries again,
+ * exactly as server.mjs does (EngineDecideIntentTest.fillModelHour pins it). The retry waits on the engine thread only.
  *
  * <p>The cache is part of the behaviour, not an optimisation: a model built at one poll answers every poll for the next hour
  * even after new offers finish, exactly as the bridge's does. {@link Engine#decide} asks for it LAZILY, only for a BUY pick,

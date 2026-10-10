@@ -725,6 +725,20 @@ public final class EviLiveDeliveryTest {
     check(EviLivePlugin.cardsToNotify(null,true,announced).isEmpty(),"A null card list must be inert");
     check(EviLivePlugin.cardsToNotify(java.util.Arrays.asList((EviLivePlugin.AdviceCard)null),true,announced).isEmpty(),"A null card must be skipped");
     check(EviLivePlugin.cardsToNotify(java.util.Arrays.asList(new EviLivePlugin.AdviceCard("warn","L","N","F","")),true,new java.util.HashSet<>()).isEmpty(),"An empty message must not notify");
+    // With no offers and no advice left, every warning is forgotten, so one that comes back notifies again (review, 10 Oct:
+    // the early return used to skip the retainAll below it and keep the old key for ever).
+    {
+      EviLivePlugin hp=new EviLivePlugin();
+      set(hp,"panel",new EviLivePanel(()->{},()->{},()->{},()->{},()->{}));
+      java.util.Set<String> ann=(java.util.Set<String>)get(hp,"announcedAdvice");
+      ann.add("warn|Item|Not selling");
+      java.lang.reflect.Method hint=null;
+      for(java.lang.reflect.Method m:EviLivePlugin.class.getDeclaredMethods()) if(m.getName().equals("updatePanelOfferHint")) hint=m;
+      hint.setAccessible(true);
+      hint.invoke(hp,new java.util.ArrayList<>(),null,null,null,null);
+      javax.swing.SwingUtilities.invokeAndWait(()->{});
+      check(ann.isEmpty(),"nothing left to warn about must forget the announced warnings: "+ann);
+    }
     check("".equals(EviLivePlugin.adviceKey(null)),"adviceKey(null) must not throw");
     // A new player with a small cash stack who sets a profit target out of its reach must be told
     // that the target is the reason, and what is actually reachable -- otherwise the panel looks the

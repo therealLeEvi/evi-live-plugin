@@ -53,6 +53,12 @@ public final class InProcessEngineTest {
     int[] open = transcripts(true, false);
     int[] openSeries = transcripts(true, true);
     int[] closed = transcripts(false, true);
+    // the whole basis, but the latest prices one millisecond past STALE_PRICES_MS old: buys held back exactly as one hour short
+    staleRun = true;
+    int[] stale = transcripts(false, true);
+    staleRun = false;
+    check(stale[2] > 0 && stale[2] == closed[2] && stale[3] == closed[3], "stale prices withhold the same buys and keep the same sells as a short history: "
+      + stale[2] + "/" + stale[3] + " against " + closed[2] + "/" + closed[3]);
     threads();
     int readHours = com.evi.live.market.ReadHoursCheck.run(); // the price layer's archive door the engine reads through
     checks += readHours;
@@ -101,6 +107,16 @@ public final class InProcessEngineTest {
       "names compared as the engine DECODES them (URLSearchParams): " + InProcessEngine.withoutBuyTiers("include%4Darket=1&sourc%65=history&x=1"));
     check(InProcessEngine.withoutBuyTiers("myincludeMarket=1&holdItemId=5").equals("myincludeMarket=1&holdItemId=5&source=market"), "only those two names");
     thinIndexAfterCatchUp();
+    // STALE PRICES (review, 10 Oct): past STALE_PRICES_MS buys wait for fresh ones, with a line saying how old they are
+    long fetched = 1_000_000_000L;
+    check(InProcessEngine.STALE_PRICES_MS == 10 * 60_000L, "the maintainer's ten minutes");
+    check(!InProcessEngine.pricesStale(fetched, fetched + InProcessEngine.STALE_PRICES_MS), "exactly ten minutes old: still quoted");
+    check(InProcessEngine.pricesStale(fetched, fetched + InProcessEngine.STALE_PRICES_MS + 1), "past ten minutes: stale");
+    check(!InProcessEngine.pricesStale(0, fetched), "no prices at all is not 'stale' (nothing is quoted; the waiting line speaks)");
+    String staleLine = InProcessEngine.staleLine(fetched, fetched + 25 * 60_000L + 59_000L);
+    check(("The latest prices from the OSRS Wiki are 25 minutes old. Buy suggestions are paused until fresh prices arrive (they load"
+      + " while you are logged in).").equals(staleLine), "the stale line: " + staleLine);
+    for (char c : staleLine.toCharArray()) check(c >= 32 && c < 127, "ASCII only: " + staleLine);
   }
 
   /**
@@ -171,7 +187,8 @@ public final class InProcessEngineTest {
     return new EngineFeed.MarketSource() {
       @Override public EngineFeed.Market market(long nowMs) {
         EngineFeed.Market m = t.market(nowMs);
-        return new EngineFeed.Market(m.latest, m.latestFetchedAtMs, m.latestHour, m.catalog, m.typical, m.robust, m.newestStoredTs, readings, window,
+        long fetched = staleRun ? nowMs - InProcessEngine.STALE_PRICES_MS - 1 : m.latestFetchedAtMs;
+        return new EngineFeed.Market(m.latest, fetched, m.latestHour, m.catalog, m.typical, m.robust, m.newestStoredTs, readings, window,
           m.robustHours, m.typicalHours, m.archiveRevision, 0, readings < window, readings);
       }
 
@@ -200,6 +217,10 @@ public final class InProcessEngineTest {
    * the basis (every body must agree with the bridge's); else one hour short (buys withheld, sells and advice kept).
    * Returns {transcripts, polls, buys withheld, sells kept}.
    */
+  /** While set, {@link #withHistory} reports the latest prices as just past {@link InProcessEngine#STALE_PRICES_MS} old, and
+   *  {@link #transcripts} stores the WHOLE basis while expecting buys withheld (review, 10 Oct). */
+  static boolean staleRun;
+
   static int[] transcripts(boolean complete, boolean withSeries) throws Exception {
     int transcripts = 0, polls = 0, withheld = 0, sellsKept = 0, breakEvens = 0, buys = 0;
     for (String name : EngineRig.index()) {
@@ -232,7 +253,7 @@ public final class InProcessEngineTest {
       InProcessEngine engine = new InProcessEngine(root, now -> {
         journalThreads.add(Thread.currentThread().getName());
         return real.view(now);
-      }, withHistory(tm, complete ? InProcessEngine.BASIS_HOURS : InProcessEngine.BASIS_HOURS - 1), EngineRig.PARSER, logged::add, () -> false, since::get,
+      }, withHistory(tm, complete || staleRun ? InProcessEngine.BASIS_HOURS : InProcessEngine.BASIS_HOURS - 1), EngineRig.PARSER, logged::add, () -> false, since::get,
         withSeries ? com.evi.live.engine.RecordedSeries.of(id -> tm.body(API + "timeseries?id=" + id + "&timestep=1h")) : null);
       try {
         for (JsonElement se : t.getAsJsonArray("steps")) {
@@ -265,6 +286,8 @@ public final class InProcessEngineTest {
           check(ans != null && ans.body != null, where + ": no body (" + (ans == null ? "replaced" : ans.unavailable) + ")");
           check(ans.buysReady == complete, where + ": buysReady");
           check(complete == (ans.backfillLine == null), where + ": the price-history line is shown exactly while buys wait: " + ans.backfillLine);
+          check(ans.pricesStale == staleRun, where + ": pricesStale");
+          if (staleRun) check(ans.backfillLine.startsWith("The latest prices from the OSRS Wiki are 10 minutes old."), where + ": the stale line: " + ans.backfillLine);
           JsonObject plugin = EngineRig.j(ans.body).getAsJsonObject();
           check(plugin.has("sellBreakEven") && plugin.get("sellBreakEven").isJsonObject(), where + ": the one-voice break-evens are sent");
           polls++;

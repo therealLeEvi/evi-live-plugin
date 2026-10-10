@@ -82,6 +82,33 @@ public final class EviLiveRiskSkipTest {
     public String read(String p){return byProfile.get(p);}
     public void write(String p,String v){if(v.isEmpty())byProfile.remove(p);else byProfile.put(p,v);}
   }
+  /**
+   * A read that fails (the profile changed between lookup and read) is never cached as "no skips", and a Skip pressed then
+   * does not write over the stored list (review, 10 Oct). Called from main.
+   */
+  static void skipUnreadable()throws Exception {
+    AtomicLong clock=new AtomicLong(1_000_000L);
+    final boolean[] failNext={false};
+    FakeStore store=new FakeStore();
+    SkipMemory.Store flaky=new SkipMemory.Store(){
+      public String profileKey(){return store.profileKey();}
+      public String read(String p){if(failNext[0]){failNext[0]=false;throw new IllegalStateException("profile changed");}return store.read(p);}
+      public void write(String p,String v){store.write(p,v);}
+    };
+    store.byProfile.put("rsprofile.accountA","5:"+(clock.get()+SkipMemory.SKIP_MILLIS)+",6:"+(clock.get()+SkipMemory.SKIP_MILLIS));
+    SkipMemory m=new SkipMemory(flaky,clock::get);
+    failNext[0]=true;
+    check(!m.skip(7),"a Skip pressed while the stored list cannot be read falls back to the session");
+    check(store.byProfile.get("rsprofile.accountA").startsWith("5:")&&store.byProfile.get("rsprofile.accountA").contains(",6:"),
+      "...and leaves the stored list alone: "+store.byProfile.get("rsprofile.accountA"));
+    check(m.active().equals(new java.util.TreeSet<>(java.util.Arrays.asList(5,6))),"the failed read was not cached: the next look reads the list: "+m.active());
+    failNext[0]=true;
+    SkipMemory fresh=new SkipMemory(flaky,clock::get);
+    check(fresh.active().isEmpty(),"an unreadable list reads as none for that call");
+    check(fresh.active().equals(new java.util.TreeSet<>(java.util.Arrays.asList(5,6))),"...and is read again on the next");
+    check(fresh.skip(8)&&store.byProfile.get("rsprofile.accountA").contains("5:")&&store.byProfile.get("rsprofile.accountA").contains("8:"),
+      "a Skip once it reads adds to the list: "+store.byProfile.get("rsprofile.accountA"));
+  }
   static EviLivePlugin skipPlugin(FakeStore store,AtomicLong clock)throws Exception {
     EviLivePlugin p=new EviLivePlugin();
     set(p,"config",config(RiskLevel.LOW,RiskLevel.LOW,false,false));
@@ -250,6 +277,7 @@ public final class EviLiveRiskSkipTest {
     }
 
     // ------------------------------------------------- 5. a Skip lasts four hours, per account
+    skipUnreadable();
     {
       FakeStore store=new FakeStore();
       AtomicLong clock=new AtomicLong(1_000_000L);
@@ -385,7 +413,9 @@ public final class EviLiveRiskSkipTest {
       check(cm.getRSProfileConfiguration("evilive","skippedUntil")==null,"A write for aaaa while bbbb is current must not land in bbbb: "+cm.getRSProfileConfiguration("evilive","skippedUntil"));
       key.set(cm,"rsprofile.aaaa");
       check(stored.equals(cm.getRSProfileConfiguration("evilive","skippedUntil")),"...nor change aaaa's own value: "+cm.getRSProfileConfiguration("evilive","skippedUntil"));
-      check(realStore.read("rsprofile.bbbb")==null,"A read for bbbb while aaaa is current must return nothing, not aaaa's list");
+      boolean refused=false;
+      try{realStore.read("rsprofile.bbbb");}catch(IllegalStateException e){refused=true;}
+      check(refused,"A read for bbbb while aaaa is current must FAIL (never aaaa's list, and never \"nothing stored\", which would be cached)");
       check(stored.equals(realStore.read("rsprofile.aaaa")),"A read for the current profile returns its list");
       // "Show skipped items again" removes the key from aaaa's profile entirely.
       call(plugin,"clearSkips");

@@ -55,6 +55,13 @@ public final class InProcessEngine implements Answerer {
   public static final int BASIS_HOURS = MarketAggregates.ROBUST_PRICE_HOURS;
   static final long JOURNAL_WAIT_MS = 30_000;
   static final long ARCHIVE_WAIT_MS = 120_000;
+  /**
+   * How old the latest prices may be before buys are held back (review, 10 Oct; the maintainer chose ten minutes). They arrive about
+   * once a minute while logged in and are kept when a fetch fails, so past this the Wiki is not answering (or the player was
+   * logged out) and a buy would be quoted from old prices. The market tier drops prints over an hour old item by item; the
+   * history tier had no such check. Sells and the advice about the player's own offers still speak.
+   */
+  public static final long STALE_PRICES_MS = 10 * 60_000L;
 
   /** One answer: the body the bridge would have sent, or why there is none, and what the sidebar says about price data. */
   public static final class Answer {
@@ -70,8 +77,16 @@ public final class InProcessEngine implements Answerer {
     public final boolean buysReady;
     /** When the latest prices were fetched (epoch ms), or 0 before any. */
     public final long latestFetchedAtMs;
+    /** The buy tiers were not asked because the latest prices are older than {@link #STALE_PRICES_MS}. */
+    public final boolean pricesStale;
 
     public Answer(String query, String body, String unavailable, String backfillLine, boolean buysReady, long latestFetchedAtMs) {
+      this(query, body, unavailable, backfillLine, buysReady, latestFetchedAtMs, false);
+    }
+
+    public Answer(String query, String body, String unavailable, String backfillLine, boolean buysReady, long latestFetchedAtMs,
+                  boolean pricesStale) {
+      this.pricesStale = pricesStale;
       this.query = query;
       this.body = body;
       this.unavailable = unavailable;
@@ -99,6 +114,18 @@ public final class InProcessEngine implements Answerer {
       return "Price history: " + have + " of " + BASIS_HOURS + " hours. The OSRS Wiki did not send the rest this time; EVI asks again"
         + " when RuneLite next starts. Buy suggestions start once it is complete.";
     return "Loading price history: " + have + " of " + BASIS_HOURS + " hours. Buy suggestions start when it's done.";
+  }
+
+  /** Whether the latest prices are too old to quote a buy from at {@code now}: none at all counts as not stale (nothing is quoted). */
+  public static boolean pricesStale(long latestFetchedAtMs, long now) {
+    return latestFetchedAtMs > 0 && now - latestFetchedAtMs > STALE_PRICES_MS;
+  }
+
+  /** The sidebar line while buys wait for fresh prices. ASCII only. */
+  public static String staleLine(long latestFetchedAtMs, long now) {
+    long minutes = Math.max(0, (now - latestFetchedAtMs) / 60_000L);
+    return "The latest prices from the OSRS Wiki are " + minutes + " minutes old. Buy suggestions are paused until fresh prices"
+      + " arrive (they load while you are logged in).";
   }
 
   /**
@@ -344,6 +371,12 @@ public final class InProcessEngine implements Answerer {
     }
     if (jv == null) return new Answer(j.query, null, "EVI could not read its trade record just now. Details are in the client log.", backfill, ready, m.latestFetchedAtMs);
     feed.refresh(m, j.at, new JsonObject());
+    // Buys wait for fresh prices as they wait for the basis: the same query without the buy tiers, and a line saying why.
+    boolean stale = ready && pricesStale(m.latestFetchedAtMs, j.at);
+    if (stale) {
+      ready = false;
+      backfill = staleLine(m.latestFetchedAtMs, j.at);
+    }
     String[] prefsSource = {null};
     Engine.Query q = Engine.Query.parse(ready ? j.query : withoutBuyTiers(j.query));
     // the Block list of the account this query is for (per character); none named: none
@@ -359,7 +392,7 @@ public final class InProcessEngine implements Answerer {
     if (r.inventoryRead != null) lastInventory.put(account == null ? "" : account, new Reading(r.inventoryRead, j.at));
     if (r.failed()) {
       log.accept("EVI engine: no answer (" + r.error + ")");
-      return new Answer(j.query, null, "EVI could not work out a suggestion just now. Details are in the client log.", backfill, ready, m.latestFetchedAtMs);
+      return new Answer(j.query, null, "EVI could not work out a suggestion just now. Details are in the client log.", backfill, ready, m.latestFetchedAtMs, stale);
     }
     JsonObject body = ResponseJson.response(r);
     // The handle "I took this one" echoes (server.mjs: suggestion.id, suggestion.accepted from the log), added after the body is
@@ -374,6 +407,6 @@ public final class InProcessEngine implements Answerer {
     JsonObject be = new JsonObject();
     for (Map.Entry<Integer, Long> e : sellBreakEven(view).entrySet()) be.addProperty(String.valueOf(e.getKey()), e.getValue());
     body.add("sellBreakEven", be);
-    return new Answer(j.query, body.toString(), null, backfill, ready, m.latestFetchedAtMs);
+    return new Answer(j.query, body.toString(), null, backfill, ready, m.latestFetchedAtMs, stale);
   }
 }

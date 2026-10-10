@@ -53,8 +53,9 @@ final class InProcessTransport implements AnswerSource {
     try {
       a = f.get(WAIT_MS, TimeUnit.MILLISECONDS);
     } catch (TimeoutException e) {
-      // still working: its answer is kept when it lands, for the next poll
-      f.thenAccept(done -> remember(done, now));
+      // still working: its answer is kept when it lands, for the next poll -- timed from its ARRIVAL, or an answer slower than
+      // REUSE_MS would be stale on landing and never shown ("Waiting for prices" stuck after a slow start; review, 10 Oct)
+      f.thenAccept(done -> remember(done, clock.getAsLong()));
     } catch (InterruptedException e) {
       a = null; // nothing in EVI interrupts the poll thread; treated as "still working"
     } catch (ExecutionException e) {
