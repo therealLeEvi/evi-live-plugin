@@ -1,3 +1,17 @@
+> **This repository is archived and no longer maintained.**
+>
+> EVI Live no longer needs a companion app. From version 4.0.0, everything -- the suggestions, the trade journal and the
+> price history -- runs inside the RuneLite plugin itself, which uses only public price data from the OSRS Wiki.
+>
+> **What to do:** install **EVI Live** from RuneLite's Plugin Hub. You can stop running this bridge and delete it; the
+> plugin does not use it.
+>
+> **Your old trade history** can be brought across once: see "Bringing over an older EVI history" in the plugin's README:
+> https://github.com/therealLeEvi/evi-live-plugin
+>
+> This code receives no further updates or fixes, so please do not download or run it. It stays here, read-only, for
+> reference. Questions: https://discord.gg/gFcEBHknVN
+
 # EVI Live (Local)
 
 **EVI works out what to flip on the Grand Exchange, and shows it to you while you trade.**
