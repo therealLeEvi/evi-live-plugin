@@ -5,7 +5,6 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
@@ -1022,7 +1021,7 @@ public final class PluginJournal {
     dir.createDirectories();
     try {
       JournalFile.writeNew(target, encode(mine));
-    } catch (FileAlreadyExistsException e) {
+    } catch (JournalFile.AlreadyExists e) {
       // Another client imported this account between the check above and the write: its file IS the import
       // (written once, never changed), so this is success by another writer, not a failed attempt.
       importDone.add(account);
@@ -1050,7 +1049,7 @@ public final class PluginJournal {
     if (!from.equals(account)) m.addProperty("viaIdentitySalt", true);
     try {
       JournalFile.writeNew(marker, (m.toString() + "\n").getBytes(StandardCharsets.UTF_8));
-    } catch (FileAlreadyExistsException e) {
+    } catch (JournalFile.AlreadyExists e) {
       log.accept("EVI journal: the import is done; its counts were already saved by another client");
     } catch (IOException e) {
       log.accept("EVI journal: the import is done, but its counts could not be saved: " + e);

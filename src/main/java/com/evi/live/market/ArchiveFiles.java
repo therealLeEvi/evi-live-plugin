@@ -3,7 +3,6 @@ package com.evi.live.market;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.StandardOpenOption;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -15,8 +14,8 @@ import net.runelite.client.util.Filepath;
  * plugin-data folder. The rule is the journal's ({@code JournalFile.writeNew}, Phase 1), with one difference.
  *
  * <p>THE RULE: write the whole content to a temporary file in the same folder, force it to disk, then RENAME it into
- * place, and NEVER over an existing file: when the target exists this throws {@link FileAlreadyExistsException} and
- * changes nothing. A replace is avoided on purpose -- on Windows a move over a file fails with AccessDenied whenever
+ * place, and NEVER over an existing file: when the target exists the rename fails and changes nothing, and this
+ * reports it (returns false). A replace is avoided on purpose -- on Windows a move over a file fails with AccessDenied whenever
  * any other process has that file open, which is exactly what the other client's read does (the Phase 1 lesson). So
  * no {@code REPLACE_EXISTING}, and no {@code ATOMIC_MOVE} (on Windows that one REPLACES). A plain rename in one folder
  * is atomic: a reader sees no file or the whole file, never part of one.
@@ -61,8 +60,9 @@ final class ArchiveFiles {
       try {
         tmp.moveTo(target); // no REPLACE_EXISTING, no ATOMIC_MOVE: an existing target fails the move
         return true;
-      } catch (FileAlreadyExistsException e) {
-        return false; // created by someone else meanwhile: theirs stands, untouched
+      } catch (IOException e) {
+        if (target.exists()) return false; // created by someone else meanwhile: theirs stands, untouched
+        throw e;
       }
     } finally {
       tmp.deleteIfExists(); // only ever this write's own temporary file

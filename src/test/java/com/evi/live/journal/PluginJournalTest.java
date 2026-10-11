@@ -7,7 +7,6 @@ import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -908,7 +907,7 @@ public final class PluginJournalTest {
   static void importFileStateFromLooks() throws Exception {
     final PluginJournal.ImportFileState P = PluginJournal.ImportFileState.PRESENT, M = PluginJournal.ImportFileState.ABSENT,
       U = PluginJournal.ImportFileState.UNKNOWN;
-    IOException sharing = new java.nio.file.FileSystemException("events.jsonl", null, "The process cannot access the file because it is being used by another process");
+    IOException sharing = new IOException("events.jsonl: The process cannot access the file because it is being used by another process");
     check(PluginJournal.importFileState(fakeLook(true, sharing, false)) == P, "a file is present, whatever else is said");
     check(PluginJournal.importFileState(fakeLook(false, new java.nio.file.NoSuchFileException("events.jsonl"), false)) == M, "no such file: absent");
     check(PluginJournal.importFileState(fakeLook(false, sharing, false)) == U, "a sharing violation is NOT absence");
@@ -938,7 +937,7 @@ public final class PluginJournalTest {
     PluginJournal j = new PluginJournal(root, clock::get, ParityJson::parse, () -> true, logs::add);
     List<String> notices = Collections.synchronizedList(new ArrayList<>());
     j.onImportNotice(notices::add);
-    IOException sharing = new java.nio.file.FileSystemException("events.jsonl", null, "The process cannot access the file because it is being used by another process");
+    IOException sharing = new IOException("events.jsonl: The process cannot access the file because it is being used by another process");
     j.importFileLook = f -> fakeLook(false, sharing, false);
     j.start();
     Client p = new Client("p1", A);
@@ -1846,7 +1845,7 @@ public final class PluginJournalTest {
     PluginJournal w = new PluginJournal(root4, clock::get, ParityJson::parse, () -> true, logs::add);
     w.expectCharacterNames(true);
     w.characterName(A, "New Name");
-    IOException sharing = new java.nio.file.FileSystemException("preferences.json", null, "The process cannot access the file because it is being used by another process");
+    IOException sharing = new IOException("preferences.json: The process cannot access the file because it is being used by another process");
     w.importFileLook = f -> PluginJournal.PREFERENCES_FILE.equals(f.getFileName()) ? fakeLook(false, sharing, false) : PluginJournal.look(f);
     w.start();
     Client p4 = new Client("p4", A);
@@ -1909,7 +1908,7 @@ public final class PluginJournalTest {
   /**
    * writeNew never replaces a file: not one that exists when it is called, and not one another writer
    * creates between its check and its rename (the race a second client's import could hit). Either way
-   * it throws FileAlreadyExistsException, the other writer's bytes are untouched, and no .tmp is left.
+   * it throws JournalFile.AlreadyExists, the other writer's bytes are untouched, and no .tmp is left.
    */
   static void writeNewNeverOverwrites() throws Exception {
     Filepath root = tempRoot();
@@ -1920,7 +1919,7 @@ public final class PluginJournalTest {
     try {
       JournalFile.writeNew(existing, mine);
       check(false, "writeNew replaced an existing file");
-    } catch (FileAlreadyExistsException expected) {
+    } catch (JournalFile.AlreadyExists expected) {
       check(Arrays.equals(JournalFile.readAll(existing), theirs), "an existing file's bytes changed");
     }
     check(!root.joinSegment("imported-x.jsonl.tmp").exists(), "a refused writeNew left its temporary file");
@@ -1936,7 +1935,7 @@ public final class PluginJournalTest {
     try {
       JournalFile.writeNew(raced, mine);
       check(false, "writeNew's rename replaced a file another writer created after the check");
-    } catch (FileAlreadyExistsException expected) {
+    } catch (JournalFile.AlreadyExists expected) {
       check(Arrays.equals(JournalFile.readAll(raced), theirs), "the other writer's file was replaced: " + new String(JournalFile.readAll(raced), StandardCharsets.UTF_8));
     } finally {
       JournalFile.moveSeam = null;

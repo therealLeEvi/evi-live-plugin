@@ -6,7 +6,6 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
@@ -194,14 +193,15 @@ final class JournalFile {
   /**
    * Creates {@code target} holding {@code content}, complete or not at all: written in full to a temporary
    * file in the same folder (a name no reader lists), forced to disk, then renamed into place.
-   * NEVER over an existing file: when {@code target} exists this throws {@link FileAlreadyExistsException}
-   * and changes nothing (see the class comment for why a replace is avoided) -- and that holds when another
-   * process creates {@code target} between the check and the rename, because the rename is asked NOT to
-   * replace. (ATOMIC_MOVE is deliberately not used: on Windows it is a move that REPLACES an existing file.)
-   * A failure leaves no temporary file behind.
+   * NEVER over an existing file: when {@code target} exists this throws {@link AlreadyExists} and changes
+   * nothing (see the class comment for why a replace is avoided) -- and that holds when another process
+   * creates {@code target} between the check and the rename, because the rename is asked NOT to replace: a
+   * rename that fails while {@code target} is there is reported as {@link AlreadyExists} too. (ATOMIC_MOVE is
+   * deliberately not used: on Windows it is a move that REPLACES an existing file.) A failure leaves no
+   * temporary file behind.
    */
   static void writeNew(Filepath target, byte[] content) throws IOException {
-    if (target.exists()) throw new FileAlreadyExistsException(target.getFileName());
+    if (target.exists()) throw new AlreadyExists(target.getFileName(), null);
     Filepath tmp = target.getParent().joinSegment(target.getFileName() + ".tmp");
     tmp.deleteIfExists();
     try {
@@ -212,9 +212,24 @@ final class JournalFile {
       }
       Consumer<Filepath> seam = moveSeam;
       if (seam != null) seam.accept(target);
-      tmp.moveTo(target); // no REPLACE_EXISTING, no ATOMIC_MOVE: an existing target fails the move
+      try {
+        tmp.moveTo(target); // no REPLACE_EXISTING, no ATOMIC_MOVE: an existing target fails the move
+      } catch (IOException e) {
+        if (target.exists()) throw new AlreadyExists(target.getFileName(), e); // created by another writer meanwhile
+        throw e;
+      }
     } finally {
       tmp.deleteIfExists();
+    }
+  }
+
+  /**
+   * {@link #writeNew}'s target was already there (before the write, or created by another writer before its rename):
+   * nothing was written. The plugin's own exception, so no java.nio.file exception class is named.
+   */
+  static final class AlreadyExists extends IOException {
+    AlreadyExists(String fileName, IOException cause) {
+      super(fileName + " already exists", cause);
     }
   }
 

@@ -89,9 +89,9 @@ public final class HubRulesScanTest {
   static final String JAVA_NET_ALLOWED = "URI|URISyntaxException|URLEncoder|URLDecoder|Proxy|MalformedURLException|SocketTimeoutException"
     + "|ConnectException|UnknownHostException|NoRouteToHostException";
   /** java.nio.file: options, exceptions and FileTime -- what Filepath's own methods take and throw. Not Files, Paths, Path or FileSystems. */
-  static final String JAVA_NIO_FILE_ALLOWED = "StandardOpenOption|StandardCopyOption|OpenOption|CopyOption|FileAlreadyExistsException"
+  static final String JAVA_NIO_FILE_ALLOWED = "StandardOpenOption|StandardCopyOption|OpenOption|CopyOption"
     + "|NoSuchFileException|AccessDeniedException|AtomicMoveNotSupportedException|DirectoryNotEmptyException|NotDirectoryException"
-    + "|FileSystemException|attribute\\.FileTime";
+    + "|attribute\\.FileTime";
   /** java.nio.channels: the FileChannel that Filepath.openFileChannel hands out, and what goes with it. No socket or async channel. */
   static final String JAVA_NIO_CHANNELS_ALLOWED = "FileChannel|FileLock|Channels|ReadableByteChannel|WritableByteChannel|SeekableByteChannel"
     + "|ByteChannel|ClosedChannelException|OverlappingFileLockException";
@@ -363,7 +363,7 @@ public final class HubRulesScanTest {
       // 7 Oct 2026, second pass: the planted file that stayed green, line by line.
       "t.forEach(Thread::interrupt);", "Optional.of(e).ifPresent(ExecutorService::shutdownNow);", "new java.io.PrintWriter(\"x.txt\");",
       "java.nio.channels.SocketChannel.open(new java.net.InetSocketAddress(\"h\", 1));",
-      "java.beans.Introspector.getBeanInfo(c).getPropertyDescriptors()[0].getReadMethod().invoke(o);", "java.nio.file.FileSystems.getDefault();",
+      "java.beans.Introspector.getBeanInfo(c).getPropertyDescriptors()[0].getReadMethod().invoke(o);", "java.nio.file.FileSystems.getDefault();", "import java.nio.file.FileAlreadyExistsException;", "throw new java.nio.file.FileSystemException(name);",
       "java.net.InetAddress.getByName(h);",
       // ...method references to every banned call...
       "LongConsumer s = Thread::sleep;", "Consumer<Long> s = TimeUnit.SECONDS::sleep;", "Consumer<Long> s = TimeUnit.SECONDS :: sleep;",
@@ -399,7 +399,7 @@ public final class HubRulesScanTest {
       "Profile f = files.get(0);", "executor.invokeLater(r);", "a.b\n  .c(1);",
       // second pass: the imports and references the plugin really uses, and look-alikes of the new rules.
       "import java.io.BufferedReader;", "import java.io.InputStream;", "import java.io.OutputStream;", "import java.net.Proxy;", "import java.net.URLEncoder;",
-      "import java.net.URI;", ".proxy(Proxy.NO_PROXY)", "import java.nio.channels.FileChannel;", "import java.nio.file.FileAlreadyExistsException;",
+      "import java.net.URI;", ".proxy(Proxy.NO_PROXY)", "import java.nio.channels.FileChannel;",
       "import java.nio.file.StandardCopyOption;", "import java.nio.file.StandardOpenOption;", "import java.nio.file.attribute.FileTime;",
       "import java.nio.charset.StandardCharsets;", "import java.util.List;", "import static java.util.Objects.requireNonNull;",
       "java.util.List<String> xs = new java.util.ArrayList<>();", "map.merge(k, 1, Integer::sum);", "Store.replay(all, this::write);",
