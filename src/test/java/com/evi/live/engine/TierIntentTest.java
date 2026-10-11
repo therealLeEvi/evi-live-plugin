@@ -1,15 +1,13 @@
 package com.evi.live.engine;
 
+import net.runelite.client.util.Filepath;
+import com.evi.live.TestFiles;
 import com.evi.live.journal.FifoMatcher;
 import com.evi.live.journal.Offer;
 import com.evi.live.market.HourBucket;
 import com.evi.live.market.LatestPrices;
 import com.evi.live.market.WikiJson;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -18,7 +16,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.stream.Stream;
 
 /**
  * Phase 3b's traps as INTENT, beside the recorded vectors and transcripts, so a parity diff and a broken rule read
@@ -430,16 +427,14 @@ public final class TierIntentTest {
   static void nothingIsWiredIntoThePluginYet() throws IOException {
     String dir = System.getProperty("evi.mainSource");
     check(dir != null && !dir.isEmpty(), "evi.mainSource is not set");
-    Path root = Paths.get(dir), engine = root.resolve(Paths.get("com", "evi", "live", "engine")),
-      inprocess = root.resolve(Paths.get("com", "evi", "live", "inprocess"));
+    Filepath root = TestFiles.rooted(dir), engine = TestFiles.at(root, "com", "evi", "live", "engine"),
+      inprocess = TestFiles.at(root, "com", "evi", "live", "inprocess");
     List<String> users = new ArrayList<>();
     int scanned = 0;
-    try (Stream<Path> files = Files.walk(root)) {
-      for (Path f : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".java"))::iterator) {
-        if (f.startsWith(engine) || f.startsWith(inprocess)) continue;
-        scanned++;
-        if (new String(Files.readAllBytes(f), StandardCharsets.UTF_8).contains("com.evi.live.engine")) users.add(root.relativize(f).toString());
-      }
+    for (Filepath f : TestFiles.files(root, ".java")) {
+      if (f.startsWith(engine) || f.startsWith(inprocess)) continue;
+      scanned++;
+      if (TestFiles.text(f).contains("com.evi.live.engine")) users.add(TestFiles.relative(root, f));
     }
     check(scanned >= 40, "too few plugin sources scanned (" + scanned + ")");
     check(users.isEmpty(), "the engine is referenced outside its package already: " + users);

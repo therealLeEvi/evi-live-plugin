@@ -23,7 +23,6 @@ import java.io.Reader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -59,7 +58,7 @@ import net.runelite.client.util.Filepath;
  *       above break-even where relist hands over at 5%; the old two-process rule (oneVoice false) kept only to show the
  *       difference is real.</li>
  * </ol>
- * (Filepath.Unchecked.getRooted is used HERE ONLY, to aim a Filepath at a temporary folder.)
+ * (The folder comes from TestFiles.tempDir; every file here is read and written through Filepath.)
  */
 public final class EviLiveInProcessWiringTest {
   static int checks;
@@ -154,7 +153,7 @@ public final class EviLiveInProcessWiringTest {
     check(!hasMethod(com.evi.live.market.WikiPriceClient.class, "currentHour") && !hasMethod(com.evi.live.market.PriceDataService.class, "followUnstampedHour")
       && !hasField(com.evi.live.market.MarketSnapshot.class, "unstampedHour") && !hasMethod(EngineFeed.Market.class, "withLatestHour"),
       "the shadow's unstamped hour must be gone (the plugin reads the Wiki's /1h only by timestamp)");
-    String gradle = new String(Files.readAllBytes(java.nio.file.Paths.get("build.gradle")), StandardCharsets.UTF_8);
+    String gradle = TestFiles.text(TestFiles.project().joinSegment("build.gradle"));
     for (String flag : new String[]{"hasProperty('inProcessEngine')", "hasProperty('shadowEngine')", "hasProperty('journalCompare')", "evi.inProcessEngine",
       "evi.shadowEngine", "evi.journalCompare", "pairingTest", "shadowWiringTest", "shadowEngineTest", "shadowTranscriptTest", "com.evi.live.shadow"})
       check(!gradle.contains(flag), "build.gradle must not mention " + flag);
@@ -272,7 +271,7 @@ public final class EviLiveInProcessWiringTest {
   static final String MAPPING = "[{\"id\":554,\"name\":\"Fire rune\",\"members\":false,\"limit\":25000}]";
 
   static void pollThread() throws Exception {
-    Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-inprocess-wiring"));
+    Filepath root = TestFiles.tempDir("evi-inprocess-wiring");
     PluginJournal journal = new PluginJournal(root, System::currentTimeMillis, s -> new JsonParser().parse(s), () -> false, m -> { });
     journal.start();
     EngineFeed.Market m = new EngineFeed.Market(WikiJson.latest(LATEST), System.currentTimeMillis(), null, ItemCatalog.parse(MAPPING), null, null,

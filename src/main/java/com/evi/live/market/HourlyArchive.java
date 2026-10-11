@@ -78,9 +78,19 @@ public final class HourlyArchive {
     return list(NONE);
   }
 
+  /** TEST SEAM: told the hour folder just before it is listed; a test throws from it to stand for a folder that cannot be read. */
+  interface ListSeam {
+    void listing(Filepath dir) throws IOException;
+  }
+
+  /** The {@link ListSeam}. Null in production. */
+  static volatile ListSeam listSeam;
+
   private NavigableSet<Long> list(Pattern p) throws IOException {
     TreeSet<Long> out = new TreeSet<>();
     if (!dir.isDirectory()) return out;
+    ListSeam seam = listSeam;
+    if (seam != null) seam.listing(dir);
     try (Stream<Filepath> s = dir.walk(1)) {
       s.forEach(f -> {
         Matcher m = p.matcher(f.getFileName());
@@ -177,7 +187,7 @@ public final class HourlyArchive {
         else if (n.matches() && Long.parseLong(n.group(1)) < oldestKept) doomed.add(f);
         else if (TMP.matcher(name).matches()) {
           try {
-            if (nowMs - f.getLastModifiedTime().toMillis() > STALE_TMP_MS) doomed.add(f);
+            if (nowMs - ArchiveFiles.modifiedMs(f) > STALE_TMP_MS) doomed.add(f);
           } catch (IOException ignored) {
             // gone already
           }

@@ -1,5 +1,6 @@
 package com.evi.live.inprocess;
 
+import com.evi.live.TestFiles;
 import com.evi.live.inprocess.EngineFeed;
 import com.evi.live.inprocess.InProcessEngine;
 import com.evi.live.journal.PluginJournal;
@@ -12,7 +13,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -232,7 +232,7 @@ public final class InProcessEngineTest {
       if (EngineRig.pollsBefore(t, cutoff) == 0) continue;
       transcripts++;
       int upTo = EngineRig.stepBefore(t, cutoff);
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-inprocess-test"));
+      Filepath root = TestFiles.tempDir("evi-inprocess-test");
       AtomicLong clock = new AtomicLong();
       List<String> logged = Collections.synchronizedList(new ArrayList<>());
       JsonObject boot = t.getAsJsonObject("input").getAsJsonObject("boot");
@@ -362,7 +362,7 @@ public final class InProcessEngineTest {
   }
 
   static void threads() throws Exception {
-    Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-inprocess-threads"));
+    Filepath root = TestFiles.tempDir("evi-inprocess-threads");
     try {
       // the hand-over returns at once while the engine waits on a journal that has not answered; a newer query replaces a waiting one
       CompletableFuture<PluginJournal.EngineView> held = new CompletableFuture<>();

@@ -1,5 +1,6 @@
 package com.evi.live.inprocess;
 
+import com.evi.live.TestFiles;
 import com.evi.live.BlockedItems;
 import com.evi.live.engine.RecordedSeries;
 import com.evi.live.inprocess.EngineFeed;
@@ -14,7 +15,6 @@ import com.evi.live.market.HourBucket;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -181,7 +181,7 @@ public final class InProcessButtonsTest {
   /** Returns {polls compared, ids compared, presses compared, restarts, marks checked after the final restart}. */
   static int[] replay(String name, JsonObject t) throws Exception {
     int polls = 0, ids = 0, presses = 0, restarts = 0, kept = 0;
-    Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-buttons-test"));
+    Filepath root = TestFiles.tempDir("evi-buttons-test");
     AtomicLong clock = new AtomicLong();
     List<String> logged = Collections.synchronizedList(new ArrayList<>());
     Map<String, String> config = new ConcurrentHashMap<>();

@@ -1,5 +1,6 @@
 package com.evi.live.engine;
 
+import com.evi.live.TestFiles;
 import com.evi.live.journal.Store;
 import com.evi.live.market.HourBucket;
 import com.evi.live.market.ItemCatalog;
@@ -10,9 +11,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -396,7 +394,7 @@ public final class MarketTierIntentTest {
   static void theSourceUsesTheJsArithmetic() throws IOException {
     String dir = System.getProperty("evi.mainSource");
     check(dir != null && !dir.isEmpty(), "evi.mainSource is not set");
-    String src = new String(Files.readAllBytes(Paths.get(dir, "com", "evi", "live", "engine", "MarketTier.java")), StandardCharsets.UTF_8);
+    String src = TestFiles.text(TestFiles.at(TestFiles.rooted(dir), "com", "evi", "live", "engine", "MarketTier.java"));
     check(src.contains("StrictMath.log(liquidity + 1)") && !Pattern.compile("(?<!Strict)Math\\.log\\(").matcher(src).find(),
       "the score's log must be StrictMath.log (fdlibm, as V8's)");
     check(!src.contains("String.format") && !src.contains("Math.rint") && !src.contains("HashMap") && !src.contains("getDefault()"),

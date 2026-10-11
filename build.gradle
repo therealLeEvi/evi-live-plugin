@@ -131,7 +131,9 @@ tasks.register('hubRulesTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.HubRulesScanTest'
     systemProperty 'evi.mainSource', file('src/main/java').absolutePath
+    systemProperty 'evi.testSource', file('src/test/java').absolutePath
     inputs.dir('src/main/java')
+    inputs.dir('src/test/java')
 }
 // The maintainer's 6 Oct 2026 sidebar decisions, as the words a player reads: the import line (only while the import is on
 // and its file missing), every buy card's TOTAL COST (en-US, long arithmetic), and High with "No limit" named on the risk
@@ -280,6 +282,7 @@ tasks.register('inProcessWiringTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.EviLiveInProcessWiringTest'
     systemProperty 'java.awt.headless', 'true'
+    systemProperty 'evi.projectDir', projectDir.absolutePath
 }
 // Decision 12 (8 Oct): the sidebar's buttons persisted by the plugin.
 //   inProcessButtonsTest  every golden transcript with a sidebar press, replayed through the plugin's OWN stores (journal marks,

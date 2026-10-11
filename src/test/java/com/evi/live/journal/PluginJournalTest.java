@@ -1,5 +1,6 @@
 package com.evi.live.journal;
 
+import com.evi.live.TestFiles;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -7,7 +8,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -29,8 +29,8 @@ import net.runelite.client.util.Filepath;
  * covers and watching it fail (see the sabotage list in the stage report).
  *
  * <p>Uses only SYNTHETIC data: the public golden transcripts and packets written below. Temporary folders
- * are created under the system temp directory and deleted afterwards. (Filepath.Unchecked.getRooted is used
- * HERE ONLY, to point a Filepath at a temp folder; the plugin itself only ever uses getPluginDirectory().)
+ * are created under the system temp directory and deleted afterwards. (They come from
+ * TestFiles.tempDir, and every file is read and written through Filepath; the plugin itself only ever uses getPluginDirectory().)
  */
 public final class PluginJournalTest {
   static final String A = "a1".repeat(32);
@@ -95,7 +95,7 @@ public final class PluginJournalTest {
   // ------------------------------------------------------------------------------------------- helpers
 
   static Filepath tempRoot() throws Exception {
-    return Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-journal-test"));
+    return TestFiles.tempDir("evi-journal-test");
   }
 
   static PluginJournal journal(Filepath root, AtomicLong clock, BooleanSupplier importEnabled) {
@@ -1193,60 +1193,59 @@ public final class PluginJournalTest {
 
   /**
    * The fingerprint the imported file is checked by, one component at a time, on a 1,000-byte file read through
-   * 64-byte windows. Each change below is visible to exactly ONE component: the length (a middle line removed,
-   * time put back), the head window (byte 10 changed, time put back), the tail window (the last line changed,
-   * time put back), and the modified time (a middle byte changed with a fresh time). Dropping any component
-   * from the comparison fails the line that names it. Unchanged, it is equal; a missing file is not.
+   * 64-byte windows. Each change below is visible to exactly ONE component: the length (a middle line removed),
+   * the head window (byte 10 changed), the tail window (the last line changed), and the modified time (a middle
+   * byte changed, read with a later time). Dropping any component from the comparison fails the line that names it.
+   * Unchanged, it is equal; a missing file is not. The size and both windows are read from the real file; the time
+   * each is compared at is pinned in the fingerprint itself ({@link #atTime}), because Filepath -- the only file API
+   * these tests use, as the plugin does -- cannot set a file's modified time.
    */
   static void fingerprintSeesEveryKindOfChange() throws Exception {
     int saved = JournalFile.fingerprintWindow;
-    java.nio.file.Path base = Files.createTempDirectory("evi-journal-test");
+    Filepath root = TestFiles.tempDir("evi-journal-test");
     try {
       JournalFile.fingerprintWindow = 64;
-      Filepath root = Filepath.Unchecked.getRooted(base);
       Filepath f = root.joinSegment("imported-x.jsonl");
-      java.nio.file.Path real = base.resolve("imported-x.jsonl");
       StringBuilder sb = new StringBuilder();
       for (int i = 0; i < 10; i++) sb.append(String.format(java.util.Locale.US, "line-%03d-", i)).append("x".repeat(90)).append('\n');
       byte[] orig = sb.toString().getBytes(StandardCharsets.UTF_8);
       check(orig.length == 1000, "setup: " + orig.length + " bytes");
       f.write(orig);
       java.nio.file.attribute.FileTime t0 = java.nio.file.attribute.FileTime.fromMillis(1_700_000_000_000L);
-      Files.setLastModifiedTime(real, t0);
-      JournalFile.Fingerprint fp0 = JournalFile.fingerprint(f);
-      check(fp0.size == 1000 && fp0.head.length == 64 && fp0.tail.length == 64 && t0.equals(fp0.modified), "the fingerprint's parts: " + fp0.size + "/" + fp0.head.length + "/" + fp0.tail.length);
-      check(fp0.equals(JournalFile.fingerprint(f)), "an unchanged file must give an equal fingerprint");
+      JournalFile.Fingerprint read0 = JournalFile.fingerprint(f);
+      check(read0.modified != null && read0.modified.equals(f.getLastModifiedTime()), "the fingerprint carries the file's own modified time: " + read0.modified);
+      JournalFile.Fingerprint fp0 = atTime(read0, t0);
+      check(fp0.size == 1000 && fp0.head.length == 64 && fp0.tail.length == 64, "the fingerprint's parts: " + fp0.size + "/" + fp0.head.length + "/" + fp0.tail.length);
+      check(Arrays.equals(fp0.head, Arrays.copyOfRange(orig, 0, 64)) && Arrays.equals(fp0.tail, Arrays.copyOfRange(orig, 936, 1000)),
+        "the windows are the file's first and last 64 bytes");
+      check(fp0.equals(atTime(JournalFile.fingerprint(f), t0)), "an unchanged file must give an equal fingerprint");
       // Length only: line 5 removed; head, tail and time all as before.
       byte[] shorter = new byte[900];
       System.arraycopy(orig, 0, shorter, 0, 500);
       System.arraycopy(orig, 600, shorter, 500, 400);
       f.write(shorter);
-      Files.setLastModifiedTime(real, t0);
-      JournalFile.Fingerprint fp1 = JournalFile.fingerprint(f);
-      check(Arrays.equals(fp1.head, fp0.head) && Arrays.equals(fp1.tail, fp0.tail) && t0.equals(fp1.modified), "setup: only the length differs");
+      JournalFile.Fingerprint fp1 = atTime(JournalFile.fingerprint(f), t0);
+      check(fp1.size == 900 && Arrays.equals(fp1.head, fp0.head) && Arrays.equals(fp1.tail, fp0.tail), "setup: only the length differs");
       check(!fp1.equals(fp0), "a file that SHRANK (same ends, same time) must not match: the LENGTH is not compared");
       // Head only.
       byte[] head = orig.clone();
       head[10] = 'Z';
       f.write(head);
-      Files.setLastModifiedTime(real, t0);
-      JournalFile.Fingerprint fp2 = JournalFile.fingerprint(f);
-      check(fp2.size == 1000 && Arrays.equals(fp2.tail, fp0.tail) && t0.equals(fp2.modified), "setup: only the head differs");
+      JournalFile.Fingerprint fp2 = atTime(JournalFile.fingerprint(f), t0);
+      check(fp2.size == 1000 && !Arrays.equals(fp2.head, fp0.head) && Arrays.equals(fp2.tail, fp0.tail), "setup: only the head differs");
       check(!fp2.equals(fp0), "a change in the first bytes (same length, same time) must not match: the HEAD is not compared");
       // Tail only.
       byte[] tail = orig.clone();
       tail[990] = 'Z';
       f.write(tail);
-      Files.setLastModifiedTime(real, t0);
-      JournalFile.Fingerprint fp3 = JournalFile.fingerprint(f);
-      check(fp3.size == 1000 && Arrays.equals(fp3.head, fp0.head) && t0.equals(fp3.modified), "setup: only the tail differs");
+      JournalFile.Fingerprint fp3 = atTime(JournalFile.fingerprint(f), t0);
+      check(fp3.size == 1000 && Arrays.equals(fp3.head, fp0.head) && !Arrays.equals(fp3.tail, fp0.tail), "setup: only the tail differs");
       check(!fp3.equals(fp0), "a change in the last bytes (same length, same time) must not match: the TAIL is not compared");
-      // Time only (a middle byte, outside both windows, written fresh).
+      // Time only (a middle byte, outside both windows, read with a later time).
       byte[] middle = orig.clone();
       middle[500] = 'Z';
       f.write(middle);
-      Files.setLastModifiedTime(real, java.nio.file.attribute.FileTime.fromMillis(1_700_000_002_000L));
-      JournalFile.Fingerprint fp4 = JournalFile.fingerprint(f);
+      JournalFile.Fingerprint fp4 = atTime(JournalFile.fingerprint(f), java.nio.file.attribute.FileTime.fromMillis(1_700_000_002_000L));
       check(fp4.size == 1000 && Arrays.equals(fp4.head, fp0.head) && Arrays.equals(fp4.tail, fp0.tail), "setup: only the time differs");
       check(!fp4.equals(fp0), "a middle change written afresh (same length, same ends) must not match: the TIME is not compared");
       // Missing.
@@ -1254,8 +1253,13 @@ public final class PluginJournalTest {
       check(!JournalFile.fingerprint(f).equals(fp0) && JournalFile.fingerprint(f).size == 0, "a missing file must not match an existing one");
     } finally {
       JournalFile.fingerprintWindow = saved;
-      Filepath.Unchecked.getRooted(base).deleteRecursively();
+      root.deleteRecursively();
     }
+  }
+
+  /** {@code fp} as read from the file, with its modified time replaced by {@code time}. */
+  static JournalFile.Fingerprint atTime(JournalFile.Fingerprint fp, java.nio.file.attribute.FileTime time) {
+    return new JournalFile.Fingerprint(fp.size, time, fp.head, fp.tail);
   }
 
   /**

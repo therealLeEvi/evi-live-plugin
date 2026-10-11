@@ -1,5 +1,6 @@
 package com.evi.live.market;
 
+import com.evi.live.TestFiles;
 import static com.evi.live.market.MarketTestSupport.check;
 
 import com.evi.live.EviLiveConfig;
@@ -12,9 +13,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import net.runelite.api.GameState;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigSection;
@@ -112,9 +109,7 @@ public final class MarketIntentTest {
   // ------------------------------------------------------------------------------------------- files
 
   static List<String> names(Filepath dir) throws IOException {
-    try (Stream<Path> s = Files.list(MarketTestSupport.path(dir))) {
-      return s.map(p -> p.getFileName().toString()).sorted().collect(Collectors.toList());
-    }
+    return TestFiles.names(dir);
   }
 
   static void filesNeverReplaced() throws Exception {
@@ -126,11 +121,11 @@ public final class MarketIntentTest {
       check(ArchiveFiles.writeNew(f, "first".getBytes(StandardCharsets.UTF_8)), "a new file must be written");
       check(names(dir).equals(List.of("hour-1.json.gz")), "no temporary file may be left behind: " + names(dir));
       // The Windows lesson: never move over an existing file -- not even (especially) while another process reads it.
-      try (FileChannel reader = FileChannel.open(MarketTestSupport.path(f), StandardOpenOption.READ)) {
+      try (FileChannel reader = f.openFileChannel(StandardOpenOption.READ)) {
         check(!ArchiveFiles.writeNew(f, "second".getBytes(StandardCharsets.UTF_8)), "writing over an existing file must be refused");
         check(reader.size() == 5, "the open reader's file changed");
       }
-      check("first".equals(new String(Files.readAllBytes(MarketTestSupport.path(f)), StandardCharsets.UTF_8)), "an existing file was replaced");
+      check("first".equals(TestFiles.text(f)), "an existing file was replaced");
       check(names(dir).equals(List.of("hour-1.json.gz")), "a refused write left a temporary file: " + names(dir));
 
       // Two writers of the SAME file at the same moment: A is paused just before its rename while B writes and renames.
@@ -165,7 +160,7 @@ public final class MarketIntentTest {
       long tmpWhileA = duringA.get().stream().filter(n -> n.startsWith("hour-2.json.gz.") && n.endsWith(".tmp")).count();
       check(tmpWhileA == 1, "writer B removed or replaced writer A's temporary file (temporary files then: " + duringA.get() + ")");
       check(!aWrote.get(), "writer A's late rename must report the file was already there");
-      check("from B".equals(new String(Files.readAllBytes(MarketTestSupport.path(g)), StandardCharsets.UTF_8)), "the first rename must stand");
+      check("from B".equals(TestFiles.text(g)), "the first rename must stand");
       check(names(dir).equals(List.of("hour-1.json.gz", "hour-2.json.gz")), "temporary files were left: " + names(dir));
     } finally {
       ArchiveFiles.moveSeam = null;
@@ -219,25 +214,30 @@ public final class MarketIntentTest {
       HourlyArchive a = new HourlyArchive(root, log::add);
       long ts = 1790812800L;
       for (int i = 0; i < 6; i++) a.store(WikiJson.hour(MarketTestSupport.hourBody(ts + i * H, 3, false)));
-      Path dir = MarketTestSupport.path(a.dir());
+      Filepath dir = a.dir();
       // A damaged file (not gzip) and one holding a different hour than its name: both removed, so they are fetched again.
-      Files.write(dir.resolve(HourlyArchive.dataName(ts + H)), "not gzip".getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
-      Files.write(dir.resolve(HourlyArchive.dataName(ts + 2 * H)), HourlyArchive.gzip(WikiJson.hour(MarketTestSupport.hourBody(ts, 3, false)).line()),
+      dir.joinSegment(HourlyArchive.dataName(ts + H)).write("not gzip".getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
+      dir.joinSegment(HourlyArchive.dataName(ts + 2 * H)).write(HourlyArchive.gzip(WikiJson.hour(MarketTestSupport.hourBody(ts, 3, false)).line()),
         StandardOpenOption.TRUNCATE_EXISTING);
-      check(a.read(ts + H) == null && !Files.exists(dir.resolve(HourlyArchive.dataName(ts + H))), "a damaged hour file must be removed");
-      check(a.read(ts + 2 * H) == null && !Files.exists(dir.resolve(HourlyArchive.dataName(ts + 2 * H))), "a file holding the wrong hour must be removed");
+      check(a.read(ts + H) == null && !dir.joinSegment(HourlyArchive.dataName(ts + H)).exists(), "a damaged hour file must be removed");
+      check(a.read(ts + 2 * H) == null && !dir.joinSegment(HourlyArchive.dataName(ts + 2 * H)).exists(), "a file holding the wrong hour must be removed");
       check(a.storedHours().equals(new java.util.TreeSet<>(List.of(ts, ts + 3 * H, ts + 4 * H, ts + 5 * H))), "stored hours after repair: " + a.storedHours());
       // Pruning: older data and markers go; a crash's old temporary file goes; a live write's fresh one stays.
       a.markEmpty(ts + 3 * H);
-      Path oldTmp = dir.resolve(HourlyArchive.dataName(ts) + ".0123abcd-0123-4567-89ab-0123456789ab.tmp");
-      Path freshTmp = dir.resolve(HourlyArchive.dataName(ts + 5 * H) + ".fedcba98-0123-4567-89ab-0123456789ab.tmp");
-      Files.write(oldTmp, new byte[3]);
-      Files.write(freshTmp, new byte[3]);
+      Filepath oldTmp = dir.joinSegment(HourlyArchive.dataName(ts) + ".0123abcd-0123-4567-89ab-0123456789ab.tmp");
+      Filepath freshTmp = dir.joinSegment(HourlyArchive.dataName(ts + 5 * H) + ".fedcba98-0123-4567-89ab-0123456789ab.tmp");
+      oldTmp.write(new byte[3]);
+      freshTmp.write(new byte[3]);
       long now = System.currentTimeMillis();
-      Files.setLastModifiedTime(oldTmp, java.nio.file.attribute.FileTime.fromMillis(now - HourlyArchive.STALE_TMP_MS - 60_000));
-      int removed = a.prune(ts + 4 * H, now);
+      int removed;
+      ArchiveFiles.modifiedSeam = f -> f.equals(oldTmp) ? now - HourlyArchive.STALE_TMP_MS - 60_000 : now;
+      try {
+        removed = a.prune(ts + 4 * H, now);
+      } finally {
+        ArchiveFiles.modifiedSeam = null;
+      }
       check(removed == 4, "prune must remove the two old hours, the old marker and the stale temporary file, removed " + removed + ": " + names(a.dir()));
-      check(names(a.dir()).equals(List.of(HourlyArchive.dataName(ts + 4 * H), freshTmp.getFileName().toString(), HourlyArchive.dataName(ts + 5 * H)).stream()
+      check(names(a.dir()).equals(List.of(HourlyArchive.dataName(ts + 4 * H), freshTmp.getFileName(), HourlyArchive.dataName(ts + 5 * H)).stream()
         .sorted().collect(Collectors.toList())), "after pruning: " + names(a.dir()));
     } finally {
       MarketTestSupport.deleteTree(root);
@@ -262,8 +262,7 @@ public final class MarketIntentTest {
     AtomicBoolean onClientThread = new AtomicBoolean(false);
     // RuneLite's injected client carries a SHARED disk cache (20 MB, every plugin's) and follows redirects: stand in for
     // both, so the derivation is shown to turn them off rather than merely inheriting nothing.
-    Path cacheDir = Files.createTempDirectory("evi-okhttp-cache");
-    okhttp3.OkHttpClient injected = fake.injected().newBuilder().cache(new okhttp3.Cache(cacheDir.toFile(), 1024 * 1024)).build();
+    okhttp3.OkHttpClient injected = fake.injected().newBuilder().cache(new okhttp3.Cache(TestFiles.okHttpCacheDir("evi-okhttp-cache"), 1024 * 1024)).build();
     check(injected.cache() != null && injected.followRedirects(), "setup: the stand-in injected client has a cache and follows redirects");
     WikiPriceClient c = new WikiPriceClient(injected, onClientThread::get);
     check(c.http.cache() == null && !c.http.followRedirects() && !c.http.followSslRedirects() && c.http.callTimeoutMillis() == 20_000,
@@ -523,12 +522,12 @@ public final class MarketIntentTest {
       check(tsOf(fake.urls().get(fake.seen.size() - 1)) == newest - H, "after three failures the hour is skipped and the next older one asked");
       check(log.stream().anyMatch(m -> m.contains("failed 3 times") && m.contains("left for the next session")), "the skip is logged: " + log);
       // An empty answer is remembered on disk and never asked again; an answer for a different hour is stored as that hour.
-      Path dir = MarketTestSupport.path(s.archive().dir());
-      check(Files.exists(dir.resolve(HourlyArchive.noneName(newest - H))), "an empty answer leaves its marker");
+      Filepath dir = s.archive().dir();
+      check(dir.joinSegment(HourlyArchive.noneName(newest - H)).exists(), "an empty answer leaves its marker");
       clock.addAndGet(2500);
       s.step();
       check(tsOf(fake.urls().get(fake.seen.size() - 1)) == newest - 2 * H, "next, the hour after the empty one");
-      check(Files.exists(dir.resolve(HourlyArchive.dataName(newest - 9 * H))) && Files.exists(dir.resolve(HourlyArchive.noneName(newest - 2 * H))),
+      check(dir.joinSegment(HourlyArchive.dataName(newest - 9 * H)).exists() && dir.joinSegment(HourlyArchive.noneName(newest - 2 * H)).exists(),
         "a different hour's answer is stored under ITS hour, and the asked-for hour is marked answered");
       clock.addAndGet(2500);
       s.step(); // 503
@@ -575,13 +574,13 @@ public final class MarketIntentTest {
       check(s.awaitTermination(10_000), "stopped");
       // A crash once left two item-list temporary files: an old one (removed at the next start) and a fresh one, which
       // could be another client's save in progress (kept).
-      Path prices = MarketTestSupport.path(root).resolve(PriceDataService.DIR);
-      Path oldTmp = prices.resolve("mapping-20727.json.gz.0123abcd-0123-4567-89ab-0123456789ab.tmp");
-      Path freshTmp = prices.resolve("mapping-20727.json.gz.fedcba98-0123-4567-89ab-0123456789ab.tmp");
-      Files.write(oldTmp, new byte[2]);
-      Files.write(freshTmp, new byte[2]);
-      Files.setLastModifiedTime(oldTmp, java.nio.file.attribute.FileTime.fromMillis(T0 + 5 * 3600_000L - HourlyArchive.STALE_TMP_MS - 60_000));
-      Files.setLastModifiedTime(freshTmp, java.nio.file.attribute.FileTime.fromMillis(T0 + 5 * 3600_000L - 1000));
+      Filepath prices = root.joinSegment(PriceDataService.DIR);
+      Filepath oldTmp = prices.joinSegment("mapping-20727.json.gz.0123abcd-0123-4567-89ab-0123456789ab.tmp");
+      Filepath freshTmp = prices.joinSegment("mapping-20727.json.gz.fedcba98-0123-4567-89ab-0123456789ab.tmp");
+      oldTmp.write(new byte[2]);
+      freshTmp.write(new byte[2]);
+      ArchiveFiles.modifiedSeam = f -> f.equals(oldTmp) ? T0 + 5 * 3600_000L - HourlyArchive.STALE_TMP_MS - 60_000
+        : f.equals(freshTmp) ? T0 + 5 * 3600_000L - 1000 : T0;
       // Five hours later, the same day: the item list comes from disk, and only the five missing hours are fetched.
       clock.set(T0 + 5 * 3600_000L);
       FakeWiki again = new FakeWiki(wikiAnswers());
@@ -594,7 +593,8 @@ public final class MarketIntentTest {
       List<Long> asked = again.urls().stream().map(MarketIntentTest::tsOf).collect(Collectors.toList());
       check(asked.equals(List.of(newest, newest - H, newest - 2 * H, newest - 3 * H, newest - 4 * H)), "a relog repairs only the gap, newest first: " + asked);
       check(s2.snapshot().catalog != null && s2.snapshot().catalog.size() == 2, "the item list was read from disk");
-      check(!Files.exists(oldTmp) && Files.exists(freshTmp), "a crash's old item-list temporary file is removed at start, a fresh one kept");
+      ArchiveFiles.modifiedSeam = null;
+      check(!oldTmp.exists() && freshTmp.exists(), "a crash's old item-list temporary file is removed at start, a fresh one kept");
       check(names(s2.archive().dir()).size() == 25, "the window still holds 25 hours: " + names(s2.archive().dir()).size());
       // The next day the item list is refreshed -- after the hours, which matter more.
       clock.set(T0 + 18 * 3600_000L); // 06:10 the next morning
@@ -883,7 +883,7 @@ public final class MarketIntentTest {
         check(s.step() == PriceDataService.Work.HOUR, "setup: hour " + i + " of the window");
       }
       check(s.snapshot().readingsBuiltAtMs == T0 + 7500, "setup: the readings are built: " + s.snapshot().readingsBuiltAtMs);
-      Path hours = MarketTestSupport.path(s.archive().dir());
+      Filepath hours = s.archive().dir();
       java.util.function.Predicate<String> failed = m -> m.contains("could not be rebuilt");
       try (AutoCloseable denied = denyListing(hours)) {
         wall.addAndGet(15 * minute);
@@ -918,29 +918,18 @@ public final class MarketIntentTest {
   }
 
   /**
-   * Test code only: makes {@code dir} unlistable until closed (a DENY entry for this user on NTFS, else POSIX read
-   * removed), and proves the denial bites before returning -- a test that only thinks the folder is unreadable proves nothing.
+   * Test code only: makes the archive's hour folder {@code dir} unlistable until closed, through HourlyArchive's list seam
+   * (a real DENY entry or POSIX bit needs file-system calls Filepath does not offer), and proves the denial bites before
+   * returning -- a test that only thinks the folder is unreadable proves nothing.
    */
-  static AutoCloseable denyListing(Path dir) throws IOException {
-    java.nio.file.attribute.AclFileAttributeView acl = Files.getFileAttributeView(dir, java.nio.file.attribute.AclFileAttributeView.class);
-    AutoCloseable restore;
-    if (acl != null) {
-      List<java.nio.file.attribute.AclEntry> before = acl.getAcl();
-      java.nio.file.attribute.UserPrincipal me = dir.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(System.getProperty("user.name"));
-      List<java.nio.file.attribute.AclEntry> denied = new ArrayList<>();
-      denied.add(java.nio.file.attribute.AclEntry.newBuilder().setType(java.nio.file.attribute.AclEntryType.DENY).setPrincipal(me)
-        .setPermissions(java.nio.file.attribute.AclEntryPermission.LIST_DIRECTORY).build());
-      denied.addAll(before);
-      acl.setAcl(denied);
-      restore = () -> acl.setAcl(before);
-    } else {
-      java.util.Set<java.nio.file.attribute.PosixFilePermission> before = Files.getPosixFilePermissions(dir);
-      Files.setPosixFilePermissions(dir, java.nio.file.attribute.PosixFilePermissions.fromString("-wx------"));
-      restore = () -> Files.setPosixFilePermissions(dir, before);
-    }
+  static AutoCloseable denyListing(Filepath dir) throws IOException {
+    HourlyArchive.listSeam = d -> {
+      if (d.equals(dir)) throw new java.nio.file.AccessDeniedException(d.toString());
+    };
+    AutoCloseable restore = () -> HourlyArchive.listSeam = null;
     boolean bites = false;
-    try (java.nio.file.DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
-      for (Path ignored : ds) break;
+    try {
+      new HourlyArchive(dir.getParent(), x -> { }).storedHours();
     } catch (IOException expected) {
       bites = true;
     }
@@ -950,7 +939,7 @@ public final class MarketIntentTest {
       } catch (Exception e) {
         throw new IOException(e);
       }
-      check(false, "setup: could not make " + dir + " unlistable on this machine, so a failed rebuild cannot be shown");
+      check(false, "setup: could not make " + dir + " unlistable, so a failed rebuild cannot be shown");
     }
     return restore;
   }
@@ -1112,7 +1101,7 @@ public final class MarketIntentTest {
       check(fake.seen.size() >= 2 && fake.urls().get(0).equals("https://prices.runescape.wiki/api/v2/osrs/mapping")
         && fake.seen.get(0).thread.equals(PriceDataService.THREAD_NAME) && String.format(UA, "item list").equals(fake.seen.get(0).request.header("User-Agent")),
         "the plugin's price layer must fetch through WikiPriceClient on evi-prices: " + fake.urls());
-      check(Files.isDirectory(MarketTestSupport.path(root).resolve("prices").resolve("1h")), "the archive lives in <plugin data>/prices/1h");
+      check(root.joinSegment("prices").joinSegment("1h").isDirectory(), "the archive lives in <plugin data>/prices/1h");
 
       // Game state: logged in turns /latest on, the login screen turns it off.
       Method onGs = EviLivePlugin.class.getMethod("onGameStateChanged", GameStateChanged.class);
@@ -1302,7 +1291,7 @@ public final class MarketIntentTest {
   }
 
   static void oneNetworkClass() throws Exception {
-    Path src = Paths.get(System.getProperty("evi.projectDir"), "src", "main", "java");
+    Filepath src = TestFiles.at(TestFiles.project(), "src", "main", "java");
     java.util.regex.Pattern host = java.util.regex.Pattern.compile("(?i)runescape\\s*\\.|\"\\s*\\.\\s*wiki\\b|\"\\s*runescape|runescape\\s*\"|\"\\s*prices\\s*\\.");
     java.util.regex.Pattern net = java.util.regex.Pattern.compile("\\.newCall\\(|\\.newWebSocket\\(|Request\\.Builder|HttpUrl|URLConnection"
       + "|java\\.net\\.Socket|java\\.net\\.http|java\\.net\\.URL\\b|new\\s+URL\\(|\\.openStream\\(|DatagramSocket|SocketChannel");
@@ -1313,12 +1302,10 @@ public final class MarketIntentTest {
     String[] fine = {"FontManager.getRunescapeBoldFont()", "the OSRS Wiki's public prices", "java.net.URLEncoder.encode(x)", "\"EVI prices: \"", "this.wiki = wiki;"};
     for (String g : fine) check(!host.matcher(g).find() && !net.matcher(g).find(), "the network detector misfired on: " + g);
     List<String> wiki = new ArrayList<>(), calls = new ArrayList<>();
-    try (Stream<Path> s = Files.walk(src)) {
-      for (Path f : s.filter(x -> x.toString().endsWith(".java")).collect(Collectors.toList())) {
-        String text = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
-        if (host.matcher(text).find()) wiki.add(f.getFileName().toString());
-        if (net.matcher(text).find()) calls.add(f.getFileName().toString());
-      }
+    for (Filepath f : TestFiles.files(src, ".java")) {
+      String text = TestFiles.text(f);
+      if (host.matcher(text).find()) wiki.add(f.getFileName());
+      if (net.matcher(text).find()) calls.add(f.getFileName());
     }
     wiki.sort(null);
     calls.sort(null);
@@ -1333,18 +1320,16 @@ public final class MarketIntentTest {
       check(!LOOPBACK_ANYWHERE.matcher(g).find(), "the loopback detector misfired on: " + g);
     List<String> loopback = new ArrayList<>();
     int files = 0;
-    try (Stream<Path> s = Files.walk(src)) {
-      for (Path f : s.filter(x -> x.toString().endsWith(".java")).collect(Collectors.toList())) {
-        files++;
-        String text = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
-        java.util.regex.Matcher m = LOOPBACK_ANYWHERE.matcher(text);
-        while (m.find()) loopback.add(f.getFileName() + ": " + m.group());
-      }
+    for (Filepath f : TestFiles.files(src, ".java")) {
+      files++;
+      String text = TestFiles.text(f);
+      java.util.regex.Matcher m = LOOPBACK_ANYWHERE.matcher(text);
+      while (m.find()) loopback.add(f.getFileName() + ": " + m.group());
     }
     check(files > 50 && loopback.isEmpty(), "no class may name 127.0.0.1, localhost, 51743 or any loopback address (" + files + " files): " + loopback);
     // THE ONE HOST. WikiPriceClient builds every URL from HOST (https, the v2 API path) and nothing else: no other host,
     // scheme or URL appears in its literals but the User-Agent's public source page, which is never requested.
-    String client = new String(Files.readAllBytes(src.resolve(Paths.get("com", "evi", "live", "market", "WikiPriceClient.java"))), StandardCharsets.UTF_8);
+    String client = TestFiles.text(TestFiles.at(src, "com", "evi", "live", "market", "WikiPriceClient.java"));
     check("prices.runescape.wiki".equals(WikiPriceClient.HOST), "the one host: " + WikiPriceClient.HOST);
     List<String> addressy = new ArrayList<>();
     for (String lit : javaLiterals(client))
@@ -1360,7 +1345,7 @@ public final class MarketIntentTest {
       && code.contains(".followSslRedirects(false)"), "the Wiki client follows no redirect, so a request cannot be sent to another host");
     check(!javaLiterals(client).contains("http"), "and asks over https only");
     Properties props = new Properties();
-    try (java.io.InputStream in = Files.newInputStream(Paths.get(System.getProperty("evi.projectDir"), "runelite-plugin.properties"))) {
+    try (java.io.InputStream in = TestFiles.project().joinSegment("runelite-plugin.properties").openInputStream()) {
       props.load(in);
     }
     check(WikiPriceClient.VERSION.equals(System.getProperty("evi.gradleVersion")) && WikiPriceClient.VERSION.equals(props.getProperty("version")),

@@ -709,7 +709,7 @@ public final class PriceDataService {
       for (Filepath f : (Iterable<Filepath>) s::iterator) {
         Matcher m = MAPPING.matcher(f.getFileName());
         if (m.matches() && Long.parseLong(m.group(1)) < keepDay) f.deleteIfExists();
-        else if (MAPPING_TMP.matcher(f.getFileName()).matches() && nowMs - f.getLastModifiedTime().toMillis() > HourlyArchive.STALE_TMP_MS) f.deleteIfExists();
+        else if (MAPPING_TMP.matcher(f.getFileName()).matches() && nowMs - ArchiveFiles.modifiedMs(f) > HourlyArchive.STALE_TMP_MS) f.deleteIfExists();
       }
     }
   }

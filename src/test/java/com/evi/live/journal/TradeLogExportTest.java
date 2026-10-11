@@ -1,8 +1,7 @@
 package com.evi.live.journal;
 
+import com.evi.live.TestFiles;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -193,10 +192,10 @@ public final class TradeLogExportTest {
         com.evi.live.inprocess.SuggestionOutcomes.Flip.of(state.flips, state.autoFlips), com.evi.live.inprocess.SuggestionOutcomes.TAKEN_WINDOW_MS,
         "sugg-secret-3"::equals));
     PluginJournal.SavedLog saved = j1.exportTradeLog(name, t, linker).get(30, TimeUnit.SECONDS);
-    Path file = Path.of(saved.file.toString());
-    check(file.isAbsolute() && file.getFileName().toString().equals(name) && file.getParent().getFileName().toString().equals(TradeLogExport.SHARE_DIR),
+    Filepath file = saved.file;
+    check(file.equals(root.joinSegment(TradeLogExport.SHARE_DIR).joinSegment(name)) && file.toString().startsWith(root.toString()),
       "saved as share/" + name + " under the data folder, an absolute path: " + file);
-    byte[] bytes = Files.readAllBytes(file);
+    byte[] bytes = TestFiles.read(file);
     StoreState st = ref.state(t);
     TradeLogExport.Csv expected = TradeLogExport.of(st, ref.offers(), linker.apply(st, ref.offers()));
     check(Arrays.equals(bytes, expected.bytes), "the file is exactly the export of a store that saw both accounts' packets");
@@ -234,13 +233,10 @@ public final class TradeLogExportTest {
     check(j1.awaitIdle(30000), "drain");
     // a linker that fails (an unreadable suggestion log) costs the links, never the file, and never a guessed link
     PluginJournal.SavedLog again = j1.exportTradeLog(name, t, (state, offers) -> { throw new IllegalStateException("synthetic"); }).get(30, TimeUnit.SECONDS);
-    check(again.offers == 7 && Arrays.equals(Files.readAllBytes(file), TradeLogExport.of(ref.state(t), ref.offers(), null).bytes),
+    check(again.offers == 7 && Arrays.equals(TestFiles.read(file), TradeLogExport.of(ref.state(t), ref.offers(), null).bytes),
       "a second export the same day replaces the file with the newer journal: " + again.offers);
-    try (java.util.stream.Stream<Path> s = Files.list(file.getParent())) {
-      List<String> names = new ArrayList<>();
-      s.forEach(p -> names.add(p.getFileName().toString()));
-      check(names.equals(List.of(name)), "only the one file in share/: " + names);
-    }
+    List<String> names = TestFiles.names(file.getParent());
+    check(names.equals(List.of(name)), "only the one file in share/: " + names);
     PluginJournalTest.stop(j1);
     PluginJournalTest.stop(j2);
     try {

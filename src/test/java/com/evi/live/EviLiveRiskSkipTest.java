@@ -1,5 +1,6 @@
 package com.evi.live;
 
+import net.runelite.client.util.Filepath;
 import com.google.gson.Gson;
 import java.awt.Color;
 import java.awt.Component;
@@ -468,14 +469,13 @@ public final class EviLiveRiskSkipTest {
     +"|(?<![\\w./:])\\d+\\s*[/:]\\s*\\d+[\\s-]+(?:trades?|flips?|los\\w*|times|chances?|odds)\\b");
 
   /** Every file under the plugin's main source (and the Hub listing beside it) that carries odds text, as "file:line: text". */
-  static List<String> oddsInSource(java.nio.file.Path root)throws Exception {
+  static List<String> oddsInSource(Filepath root)throws Exception {
     List<String> hits=new ArrayList<>();
-    List<java.nio.file.Path> files=new ArrayList<>();
-    try(java.util.stream.Stream<java.nio.file.Path> s=java.nio.file.Files.walk(root)){s.filter(java.nio.file.Files::isRegularFile).forEach(files::add);}
-    java.nio.file.Path listing=root.getParent()==null?null:root.getParent().getParent()==null?null:root.getParent().getParent().resolve("runelite-plugin.properties");
-    if(listing!=null&&java.nio.file.Files.isRegularFile(listing))files.add(listing);
-    for(java.nio.file.Path f:files){
-      List<String> lines=java.nio.file.Files.readAllLines(f,java.nio.charset.StandardCharsets.UTF_8);
+    List<Filepath> files=new ArrayList<>(TestFiles.files(root,""));
+    Filepath listing=root.isRoot()||root.getParent().isRoot()?null:root.getParent().getParent().joinSegment("runelite-plugin.properties");
+    if(listing!=null&&listing.isFile())files.add(listing);
+    for(Filepath f:files){
+      List<String> lines=TestFiles.lines(f);
       for(int i=0;i<lines.size();i++)if(ODDS.matcher(lines.get(i)).find())hits.add(f+":"+(i+1)+": "+lines.get(i).trim());
     }
     return hits;
@@ -525,8 +525,8 @@ public final class EviLiveRiskSkipTest {
       check(!ODDS.matcher(good).find(),"The odds scan must not flag: "+good);
     String mainSource=System.getProperty("evi.mainSource");
     check(mainSource!=null,"riskSkipTest must be given evi.mainSource (build.gradle), or the source scan reads nothing");
-    java.nio.file.Path root=java.nio.file.Paths.get(mainSource);
-    check(java.nio.file.Files.isRegularFile(root.resolve("java/com/evi/live/RiskLevel.java")),"The scan must be pointed at src/main: "+root);
+    Filepath root=TestFiles.rooted(mainSource);
+    check(TestFiles.at(root,"java","com","evi","live","RiskLevel.java").isFile(),"The scan must be pointed at src/main: "+root);
     List<String> hits=oddsInSource(root);
     check(hits.isEmpty(),"No odds text (\"1 in X\") may appear anywhere in the plugin's main source: "+hits);
 
@@ -586,7 +586,7 @@ public final class EviLiveRiskSkipTest {
   /** Where the test ConfigManager's two ConfigData objects point. It never exists: ConfigData only
    *  READS its file in the constructor (a missing one is an empty config) and keeps every change in
    *  memory until RuneLite's own save, which nothing here calls. Section 7 asserts it stays absent. */
-  static final java.io.File nowhere=new java.io.File(System.getProperty("java.io.tmpdir"),"evi-riskskip-"+System.nanoTime()+"-never-written.properties");
+  static final Filepath nowhere=TestFiles.systemTemp().joinSegment("evi-riskskip-"+System.nanoTime()+"-never-written.properties");
   /** A REAL RuneLite ConfigManager (1.13.1), built without its injected constructor -- which wants a
    *  live client, a profile manager over ~/.runelite and a session manager. Allocated empty, then given
    *  only what setConfiguration / getConfiguration / the RS-profile calls / getConfig actually touch.
@@ -598,10 +598,11 @@ public final class EviLiveRiskSkipTest {
     Class<?> unsafeClass=Class.forName("sun.misc.Unsafe");
     Field theUnsafe=unsafeClass.getDeclaredField("theUnsafe");theUnsafe.setAccessible(true);
     ConfigManager cm=(ConfigManager)unsafeClass.getMethod("allocateInstance",Class.class).invoke(theUnsafe.get(null),ConfigManager.class);
-    Constructor<?> data=Class.forName("net.runelite.client.config.ConfigData").getDeclaredConstructor(java.io.File.class);
+    Object file=TestFiles.asFile(nowhere); // ConfigData takes a java.io.File
+    Constructor<?> data=Class.forName("net.runelite.client.config.ConfigData").getDeclaredConstructor(file.getClass());
     data.setAccessible(true);
-    setField(cm,"configProfile",data.newInstance(nowhere));
-    setField(cm,"rsProfileConfigProfile",data.newInstance(nowhere));
+    setField(cm,"configProfile",data.newInstance(file));
+    setField(cm,"rsProfileConfigProfile",data.newInstance(file));
     setField(cm,"eventBus",bus);
     setField(cm,"serializers",new HashMap<>());
     Constructor<?> handler=Class.forName("net.runelite.client.config.ConfigInvocationHandler").getDeclaredConstructor(ConfigManager.class);

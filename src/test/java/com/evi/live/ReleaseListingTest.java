@@ -1,12 +1,9 @@
 package com.evi.live;
 
+import net.runelite.client.util.Filepath;
 import com.evi.live.journal.PluginFolder;
 import com.evi.live.market.WikiPriceClient;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -15,7 +12,6 @@ import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.PluginDescriptor;
 
@@ -49,7 +45,7 @@ public final class ReleaseListingTest {
   static final List<String> TAGS = List.of("grand exchange", "ge", "flip", "flipping", "trading", "money making", "profit", "suggestions", "journal", "evi");
 
   public static void main(String[] args) throws Exception {
-    Path project = Paths.get(System.getProperty("evi.projectDir"));
+    Filepath project = TestFiles.project();
     listing(project);
     rename(project);
     migration();
@@ -59,11 +55,11 @@ public final class ReleaseListingTest {
       + " (Same as scanner -> All items, Gear kept, the import choice kept, the Exit-risk check at Off on its new key)");
   }
 
-  static void listing(Path project) throws Exception {
-    byte[] raw = Files.readAllBytes(project.resolve("runelite-plugin.properties"));
+  static void listing(Filepath project) throws Exception {
+    byte[] raw = TestFiles.read(project.joinSegment("runelite-plugin.properties"));
     for (int i = 0; i < raw.length; i++) check((raw[i] & 0xff) < 0x80, "runelite-plugin.properties must be ASCII: byte " + i + " is 0x" + Integer.toHexString(raw[i] & 0xff));
     Properties props = new Properties();
-    try (InputStream in = Files.newInputStream(project.resolve("runelite-plugin.properties"))) {
+    try (InputStream in = project.joinSegment("runelite-plugin.properties").openInputStream()) {
       props.load(in);
     }
     check(DISPLAY_NAME.equals(props.getProperty("displayName")), "displayName: " + props.getProperty("displayName"));
@@ -79,7 +75,7 @@ public final class ReleaseListingTest {
     PluginDescriptor d = EviLivePlugin.class.getAnnotation(PluginDescriptor.class);
     check(DISPLAY_NAME.equals(d.name()) && DESCRIPTION.equals(d.description()) && TAGS.equals(Arrays.asList(d.tags())),
       "@PluginDescriptor must say what the listing says: " + d.name() + " | " + d.description() + " | " + Arrays.toString(d.tags()));
-    String gradle = new String(Files.readAllBytes(project.resolve("build.gradle")), StandardCharsets.UTF_8);
+    String gradle = TestFiles.text(project.joinSegment("build.gradle"));
     Matcher v = Pattern.compile("(?m)^version = '([^']+)'").matcher(gradle);
     check(v.find(), "build.gradle has no version line");
     check("4.0.0".equals(v.group(1)) && v.group(1).equals(props.getProperty("version")) && v.group(1).equals(WikiPriceClient.VERSION),
@@ -88,32 +84,30 @@ public final class ReleaseListingTest {
     check(pin.find() && pin.group(1).matches("\\d+\\.\\d+\\.\\d+"), "build.gradle pins an exact RuneLite release (match plugin-hub/runelite.version at release)");
   }
 
-  static void rename(Path project) throws Exception {
+  static void rename(Filepath project) throws Exception {
     PluginDescriptor d = EviLivePlugin.class.getAnnotation(PluginDescriptor.class);
     check("evi-flipping".equals(PluginFolder.INTERNAL_NAME) && "evi-flipping".equals(d.internalName()),
       "internalName evi-flipping in PluginFolder and @PluginDescriptor: " + PluginFolder.INTERNAL_NAME + " / " + d.internalName());
     check(".runelite/plugin-data/evi-flipping".equals(PluginFolder.PATH), "the data folder: " + PluginFolder.PATH);
-    String settings = new String(Files.readAllBytes(project.resolve("settings.gradle")), StandardCharsets.UTF_8).trim();
+    String settings = TestFiles.text(project.joinSegment("settings.gradle")).trim();
     check("rootProject.name = 'evi-flipping'".equals(settings), "settings.gradle: " + settings);
     // "evi-live" may remain only as the GitHub repo (evi-live-plugin) and in history comments naming the old folder.
-    Path src = project.resolve(Paths.get("src", "main", "java"));
+    Filepath src = TestFiles.at(project, "src", "main", "java");
     List<String> left = new ArrayList<>();
-    try (Stream<Path> s = Files.walk(src)) {
-      for (Path f : s.filter(x -> x.toString().endsWith(".java")).collect(Collectors.toList())) {
-        String[] lines = new String(Files.readAllBytes(f), StandardCharsets.UTF_8).split("\n");
-        for (int i = 0; i < lines.length; i++) {
-          String l = lines[i];
-          if (!l.contains("evi-live")) continue;
-          String rest = l.replace("evi-live-plugin", "");
-          boolean comment = l.trim().startsWith("//") || l.trim().startsWith("*") || l.trim().startsWith("/*");
-          if (!rest.contains("evi-live") || comment) continue;
-          left.add(f.getFileName() + ":" + (i + 1) + ": " + l.trim());
-        }
+    for (Filepath f : TestFiles.files(src, ".java")) {
+      String[] lines = TestFiles.text(f).split("\n");
+      for (int i = 0; i < lines.length; i++) {
+        String l = lines[i];
+        if (!l.contains("evi-live")) continue;
+        String rest = l.replace("evi-live-plugin", "");
+        boolean comment = l.trim().startsWith("//") || l.trim().startsWith("*") || l.trim().startsWith("/*");
+        if (!rest.contains("evi-live") || comment) continue;
+        left.add(f.getFileName() + ":" + (i + 1) + ": " + l.trim());
       }
     }
     check(left.isEmpty(), "\"evi-live\" in code (not the repo name, not a comment): " + left);
     // the panel's title and the navigation tooltip are the plugin's name
-    String plugin = new String(Files.readAllBytes(src.resolve(Paths.get("com", "evi", "live", "EviLivePlugin.java"))), StandardCharsets.UTF_8);
+    String plugin = TestFiles.text(TestFiles.at(src, "com", "evi", "live", "EviLivePlugin.java"));
     check(plugin.contains(".tooltip(\"EVI Live\")"), "the sidebar button's tooltip is the plugin's name");
   }
 

@@ -12,7 +12,6 @@ import java.awt.Container;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -385,7 +384,7 @@ public final class EviLiveSidebarLinesTest {
     final String M = PluginJournal.IMPORT_MISSING_NOTICE;
     // (a) On, no file: shown once (not again at every packet), then the file arrives: imported, and hidden.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       AtomicBoolean on = new AtomicBoolean(true);
       Notices n = new Notices();
       PluginJournal j = journal(root, on, n);
@@ -419,7 +418,7 @@ public final class EviLiveSidebarLinesTest {
     }
     // (b) Off: never shown, file or no file. Switched on with no packet in between: shown AT ONCE; off: gone at once.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       AtomicBoolean on = new AtomicBoolean(false);
       Notices n = new Notices();
       PluginJournal j = journal(root, on, n);
@@ -441,7 +440,7 @@ public final class EviLiveSidebarLinesTest {
     // (c) Already imported on disk -- the imported file alone (no counts marker), or the marker alone -- with the
     //     setting on and no import file: never shown. The line must not ask for a file the account no longer needs.
     for (String present : new String[]{"imported-" + ACCOUNT + ".jsonl", "import-done-" + ACCOUNT + ".json"}) {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       Filepath dir = root.joinSegment(PluginJournal.JOURNAL_DIR);
       dir.createDirectories();
       dir.joinSegment(present).write((present.startsWith("imported") ? "" : "{}\n").getBytes(StandardCharsets.UTF_8));
@@ -460,7 +459,7 @@ public final class EviLiveSidebarLinesTest {
     //     the line for the account of the LAST packet, not the first one the journal saw -- run in both orders, so a
     //     journal stuck on either account fails. Each step waits for the journal, so the setting it reads is the one set.
     for (boolean importedFirst : new boolean[]{true, false}) {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       Filepath dir = root.joinSegment(PluginJournal.JOURNAL_DIR);
       dir.createDirectories();
       dir.joinSegment("import-done-" + ACCOUNT + ".json").write("{}\n".getBytes(StandardCharsets.UTF_8));
@@ -567,7 +566,7 @@ public final class EviLiveSidebarLinesTest {
   static void importLineWiring() throws Exception {
     // (1) On, no file: shown. Off in the settings panel: gone at once. On again: back at once.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       AtomicBoolean on = new AtomicBoolean(true);
       Wired w = new Wired(root, on);
       w.packet(ACCOUNT, 1, T0);
@@ -580,7 +579,7 @@ public final class EviLiveSidebarLinesTest {
     }
     // (2) Off from the start, no file: never shown.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       AtomicBoolean on = new AtomicBoolean(false);
       Wired w = new Wired(root, on);
       w.packet(ACCOUNT, 1, T0);
@@ -590,7 +589,7 @@ public final class EviLiveSidebarLinesTest {
     }
     // (3) On, and the file exists: it is imported, so nothing is asked for.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       writeImportFile(root, ACCOUNT);
       AtomicBoolean on = new AtomicBoolean(true);
       Wired w = new Wired(root, on);
@@ -602,7 +601,7 @@ public final class EviLiveSidebarLinesTest {
     }
     // (4) On, no file, but the account is already imported (its marker on disk): not shown, and not after a settings change.
     {
-      Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-sidebar-test"));
+      Filepath root = TestFiles.tempDir("evi-sidebar-test");
       Filepath dir = root.joinSegment(PluginJournal.JOURNAL_DIR);
       dir.createDirectories();
       dir.joinSegment("import-done-" + ACCOUNT + ".json").write("{}\n".getBytes(StandardCharsets.UTF_8));

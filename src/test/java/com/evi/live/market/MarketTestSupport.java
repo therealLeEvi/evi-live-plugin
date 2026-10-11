@@ -1,5 +1,6 @@
 package com.evi.live.market;
 
+import com.evi.live.TestFiles;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import java.io.IOException;
@@ -7,8 +8,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,13 +42,9 @@ final class MarketTestSupport {
     checks++;
   }
 
-  /** A temp folder as a Filepath. Filepath.Unchecked is used HERE ONLY; the plugin uses getPluginDirectory(). */
+  /** A temp folder as a Filepath (TestFiles.tempDir); the plugin uses getPluginDirectory(). */
   static Filepath tempRoot(String prefix) throws IOException {
-    return Filepath.Unchecked.getRooted(Files.createTempDirectory(prefix));
-  }
-
-  static Path path(Filepath f) {
-    return java.nio.file.Paths.get(f.toString());
+    return TestFiles.tempDir(prefix);
   }
 
   static void deleteTree(Filepath f) {

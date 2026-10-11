@@ -1,17 +1,15 @@
 package com.evi.live.market;
 
+import com.evi.live.TestFiles;
 import static com.evi.live.market.MarketTestSupport.check;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Random;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Stream;
 import net.runelite.client.util.Filepath;
 
 /**
@@ -47,9 +45,10 @@ public final class MarketMemoryTest {
         }
         check(archive.store(HourBucket.of(end - h * 3600L, rows)), "store");
       }
-      long disk;
-      try (Stream<Path> s = Files.list(MarketTestSupport.path(archive.dir()))) {
-        disk = s.mapToLong(p -> p.toFile().length()).sum();
+      long disk = 0;
+      for (String name : TestFiles.names(archive.dir())) {
+        Filepath f = archive.dir().joinSegment(name);
+        if (f.isFile()) disk += f.size();
       }
       long nowMs = (end + 3600 + 600) * 1000;
       MemoryMXBean mem = ManagementFactory.getMemoryMXBean();

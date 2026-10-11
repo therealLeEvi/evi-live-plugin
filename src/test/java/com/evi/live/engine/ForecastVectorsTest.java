@@ -1,5 +1,6 @@
 package com.evi.live.engine;
 
+import com.evi.live.TestFiles;
 import static com.evi.live.engine.EngineJson.check;
 
 import com.evi.live.inprocess.EngineFeed;
@@ -16,7 +17,6 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -311,7 +311,7 @@ public final class ForecastVectorsTest {
   }
 
   static void inProcess() throws Exception {
-    Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-forecast-inprocess"));
+    Filepath root = TestFiles.tempDir("evi-forecast-inprocess");
     PluginJournal journal = new PluginJournal(root, () -> NOW, s -> new JsonParser().parse(s), () -> false, m -> { });
     journal.start();
     List<String> logged = Collections.synchronizedList(new ArrayList<>());

@@ -1,9 +1,7 @@
 package com.evi.live;
 
+import net.runelite.client.util.Filepath;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -11,7 +9,6 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * The Plugin Hub's forbidden-API list ("Rejected or Rolled Back Features", revised 6 Oct 2026), checked over
@@ -64,6 +61,11 @@ import java.util.stream.Stream;
  * is never written (a method chain, {@code var}) is seen only when its method's name is on a list -- which is why
  * the dangerous method names ({@code sleep}, {@code interrupt}, {@code createSocket}, {@code toFile}, {@code
  * openConnection} ...) are matched on their own, whatever they are called on.
+ *
+ * <p>11 Oct 2026, the Hub's review of 4.0.0: "all file i/o should be performed with Filepath rather than direct java
+ * APIs" -- the tests included. So the TEST source is scanned too, by the two file rules ({@link #TEST_RULES}): every
+ * test reads and writes through {@link TestFiles}, which is the one test file allowed to aim a Filepath at a folder
+ * (Filepath.Unchecked: a temporary folder, or the project's own files) and to hand OkHttp's cache its java.io.File.
  *
  * <p>Test-only: tests do not ship in the plugin jar. The scanner proves itself first, on known-bad and
  * known-good snippets, so a pattern that silently matches nothing fails here rather than passing.
@@ -305,7 +307,17 @@ public final class HubRulesScanTest {
   }
 
   /** Every hit in one file, as "file:line: rule: the code on that line" -- once per rule and line. */
+  /** The rules the TEST source is held to as well: file I/O through Filepath only, and no Filepath.Unchecked. */
+  static final List<Rule> TEST_RULES = RULES.stream().filter(r -> r.name.equals("java.io file APIs") || r.name.equals("Filepath.Unchecked"))
+    .collect(Collectors.toList());
+  /** The one test file exempt from {@link #TEST_RULES}, by its path under src/test/java. */
+  static final String TEST_FILES_HELPER = "com/evi/live/TestFiles.java";
+
   static List<String> scan(String file, String src) {
+    return scan(file, src, RULES);
+  }
+
+  static List<String> scan(String file, String src, List<Rule> rules) {
     List<String> hits = new ArrayList<>();
     String[] lines = src.split("\n", -1);
     int[] srcLine = new int[src.length() + 1];
@@ -316,7 +328,7 @@ public final class HubRulesScanTest {
     int[][] box = {flatLine};
     flat = references(flat, box);
     int[] lineOf = box[0];
-    for (Rule r : RULES) {
+    for (Rule r : rules) {
       Matcher m = r.pattern.matcher(flat);
       java.util.Set<Integer> seen = new java.util.TreeSet<>();
       while (m.find()) {
@@ -416,15 +428,33 @@ public final class HubRulesScanTest {
     selfTest();
     String root = System.getProperty("evi.mainSource");
     check(root != null && !root.isEmpty(), "evi.mainSource is not set");
-    Path dir = Paths.get(root);
-    List<Path> files;
-    try (Stream<Path> s = Files.walk(dir)) {
-      files = s.filter(p -> p.toString().endsWith(".java")).sorted().collect(Collectors.toList());
-    }
+    Filepath dir = TestFiles.rooted(root);
+    List<Filepath> files = TestFiles.files(dir, ".java");
     check(files.size() >= 40, "only " + files.size() + " source files found under " + dir + ": the scan would prove nothing");
     List<String> hits = new ArrayList<>();
-    for (Path p : files) hits.addAll(scan(dir.relativize(p).toString().replace('\\', '/'), new String(Files.readAllBytes(p), StandardCharsets.UTF_8)));
+    for (Filepath p : files) hits.addAll(scan(TestFiles.relative(dir, p), TestFiles.text(p)));
     check(hits.isEmpty(), "the plugin's main source uses APIs the Plugin Hub forbids:\n  " + String.join("\n  ", hits));
-    System.out.println("PASS: Hub forbidden-API scan (" + files.size() + " main source files, " + RULES.size() + " rules, " + checks + " checks, 0 hits)");
+
+    // The tests: file I/O through Filepath only, every file but the TestFiles helper.
+    check(TEST_RULES.size() == 2, "the test scan must carry the two file rules (a renamed rule would drop out silently): " + TEST_RULES.size());
+    String testRoot = System.getProperty("evi.testSource");
+    check(testRoot != null && !testRoot.isEmpty(), "evi.testSource is not set");
+    Filepath tdir = TestFiles.rooted(testRoot);
+    List<Filepath> tests = TestFiles.files(tdir, ".java");
+    check(tests.size() >= 30, "only " + tests.size() + " test files found under " + tdir + ": the scan would prove nothing");
+    List<String> testHits = new ArrayList<>();
+    boolean helper = false;
+    for (Filepath p : tests) {
+      String rel = TestFiles.relative(tdir, p);
+      if (rel.equals(TEST_FILES_HELPER)) {
+        helper = true;
+        continue;
+      }
+      testHits.addAll(scan(rel, TestFiles.text(p), TEST_RULES));
+    }
+    check(helper, "the scan must find " + TEST_FILES_HELPER + " (the one exempt file) where it expects it");
+    check(testHits.isEmpty(), "the tests do file I/O other than through Filepath (only TestFiles may aim one at a folder):\n  " + String.join("\n  ", testHits));
+    System.out.println("PASS: Hub forbidden-API scan (" + files.size() + " main source files, " + RULES.size() + " rules; " + tests.size()
+      + " test files, " + TEST_RULES.size() + " file rules; " + checks + " checks, 0 hits)");
   }
 }

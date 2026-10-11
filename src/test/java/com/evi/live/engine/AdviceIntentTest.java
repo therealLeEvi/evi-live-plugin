@@ -1,5 +1,7 @@
 package com.evi.live.engine;
 
+import net.runelite.client.util.Filepath;
+import com.evi.live.TestFiles;
 import com.evi.live.journal.Offer;
 import com.evi.live.journal.Store;
 import com.evi.live.journal.Tax;
@@ -10,10 +12,6 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -24,7 +22,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 /**
  * Phase 4's traps, as INTENT -- each rule CLAUDE.md names for these checks, asserted on values, so a parity diff and a broken
@@ -471,21 +468,19 @@ public final class AdviceIntentTest {
   private static void nothingUserVisibleIsWired() throws IOException {
     String dir = System.getProperty("evi.mainSource");
     check(dir != null && !dir.isEmpty(), "evi.mainSource is not set");
-    Path root = Paths.get(dir), engine = root.resolve(Paths.get("com", "evi", "live", "engine")),
-      inprocess = root.resolve(Paths.get("com", "evi", "live", "inprocess"));
-    check(!Files.exists(root.resolve(Paths.get("com", "evi", "live", "shadow"))), "the shadow package must be gone (4.0.0)");
+    Filepath root = TestFiles.rooted(dir), engine = TestFiles.at(root, "com", "evi", "live", "engine"),
+      inprocess = TestFiles.at(root, "com", "evi", "live", "inprocess");
+    check(!TestFiles.at(root, "com", "evi", "live", "shadow").exists(), "the shadow package must be gone (4.0.0)");
     String[] phase4 = {"ThinMarket", "CrashWatch", "Relist", "SellAdvice", "BuyAdvice", "BuyProgress", "HoldingsAdvice", "FillModel", "AdviceNote",
       "AdviceNotes", "SafetyChecks", "AccountView"};
-    for (String c : phase4) check(Files.isRegularFile(engine.resolve(c + ".java")), "missing " + c);
+    for (String c : phase4) check(engine.joinSegment(c + ".java").isFile(), "missing " + c);
     List<String> users = new ArrayList<>();
     int scanned = 0;
-    try (Stream<Path> files = Files.walk(root)) {
-      for (Path f : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".java"))::iterator) {
-        if (f.startsWith(engine) || f.startsWith(inprocess)) continue;
-        scanned++;
-        String text = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
-        for (String c : phase4) if (Pattern.compile("\\b" + c + "\\b").matcher(text).find() && text.contains("com.evi.live.engine")) users.add(root.relativize(f) + ": " + c);
-      }
+    for (Filepath f : TestFiles.files(root, ".java")) {
+      if (f.startsWith(engine) || f.startsWith(inprocess)) continue;
+      scanned++;
+      String text = TestFiles.text(f);
+      for (String c : phase4) if (Pattern.compile("\\b" + c + "\\b").matcher(text).find() && text.contains("com.evi.live.engine")) users.add(TestFiles.relative(root, f) + ": " + c);
     }
     check(scanned >= 40, "too few plugin sources scanned (" + scanned + ")");
     check(users.isEmpty(), "Phase 4 is wired into the plugin already: " + users);

@@ -14,7 +14,6 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,7 +33,7 @@ import net.runelite.client.util.Filepath;
  * the journal or the disk, not what the code says it does.
  *
  * <p>Synthetic data only. Files go to a temporary folder, deleted after.
- * (Filepath.Unchecked.getRooted is used HERE ONLY, to aim a Filepath at that folder.)
+ * (The folder comes from TestFiles.tempDir; every file here is read and written through Filepath.)
  */
 public final class EviLiveJournalWiringTest {
   static final String ACCOUNT = "c3".repeat(32);
@@ -94,7 +93,7 @@ public final class EviLiveJournalWiringTest {
     Field seam = PluginJournal.class.getDeclaredField("ioThreadSeam");
     seam.setAccessible(true);
     seam.set(null, (Consumer<String>) threadNames::add);
-    Filepath root = Filepath.Unchecked.getRooted(Files.createTempDirectory("evi-wiring-test"));
+    Filepath root = TestFiles.tempDir("evi-wiring-test");
     try {
       // A bridge journal for this very account sits in the import folder: if the import ran without the
       // setting, its line would appear in the plugin's journal.

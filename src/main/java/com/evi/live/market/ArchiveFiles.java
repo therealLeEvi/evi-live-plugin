@@ -7,6 +7,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.StandardOpenOption;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.ToLongFunction;
 import net.runelite.client.util.Filepath;
 
 /**
@@ -32,6 +33,18 @@ final class ArchiveFiles {
 
   /** TEST SEAM: told the target just before writeNew() renames its finished temporary file into place. Null in production. */
   static volatile Consumer<Filepath> moveSeam;
+
+  /**
+   * TEST SEAM: answers a file's modified time (epoch ms) in place of the file system, so a test can show an old temporary
+   * file without setting a real file's time (which Filepath, the only file API the tests use, cannot do). Null in production.
+   */
+  static volatile ToLongFunction<Filepath> modifiedSeam;
+
+  /** {@code f}'s modified time in epoch ms: the file system's, or the test seam's when one is set. */
+  static long modifiedMs(Filepath f) throws IOException {
+    ToLongFunction<Filepath> seam = modifiedSeam;
+    return seam != null ? seam.applyAsLong(f) : f.getLastModifiedTime().toMillis();
+  }
 
   /** True when the content landed; false when the target already existed (another writer won, or it was there before). */
   static boolean writeNew(Filepath target, byte[] content) throws IOException {

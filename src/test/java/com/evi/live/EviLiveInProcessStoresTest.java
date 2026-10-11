@@ -22,7 +22,6 @@ import java.io.Reader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -69,7 +68,7 @@ import net.runelite.client.util.Filepath;
  *       read back; no "not saved in this mode yet" wording anywhere, every sentence ASCII;</li>
  *   <li>the holding lines' Personal use / Gone: the card's presses for the line's lot.</li>
  * </ol>
- * (Filepath.Unchecked.getRooted is used HERE ONLY, to aim a Filepath at a temporary folder.)
+ * (The folder comes from TestFiles.tempDir; every file here is read and written through Filepath.)
  */
 public final class EviLiveInProcessStoresTest {
   static int checks;
@@ -109,7 +108,7 @@ public final class EviLiveInProcessStoresTest {
   }
 
   static Filepath temp(String prefix) throws Exception {
-    return Filepath.Unchecked.getRooted(Files.createTempDirectory(prefix));
+    return TestFiles.tempDir(prefix);
   }
 
   // ------------------------------------------------------------------------------------------- 1. the id
@@ -186,7 +185,7 @@ public final class EviLiveInProcessStoresTest {
       SuggestionRecords after = new SuggestionRecords(root, PARSER, m -> { });
       check(after.wasAccepted("a-561-00") && !after.wasAccepted("b-565-01"), "a NEW instance over the same folder reads them back");
       Filepath file = root.joinSegment(SuggestionRecords.DIR).joinSegment(SuggestionRecords.ACCEPTED);
-      String text = new String(Files.readAllBytes(java.nio.file.Paths.get(file.toString())), StandardCharsets.UTF_8);
+      String text = TestFiles.text(file);
       String[] lines = text.split("\n");
       check(lines.length == 3, "one append-only line per press: " + lines.length);
       JsonObject l0 = PARSER.apply(lines[0]).getAsJsonObject();
@@ -785,7 +784,7 @@ public final class EviLiveInProcessStoresTest {
   }
 
   static String fileText(Filepath f) throws Exception {
-    return f.isFile() ? new String(Files.readAllBytes(java.nio.file.Paths.get(f.toString())), StandardCharsets.UTF_8) : "";
+    return f.isFile() ? TestFiles.text(f) : "";
   }
 
   static void noUnsavedWording(String said) {
