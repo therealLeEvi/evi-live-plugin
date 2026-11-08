@@ -176,6 +176,7 @@ public final class MarketTierVectorsTest {
     o.blocklist = intSet(p.get("blocklist"));
     o.taxFreeOnly = bool(p.get("taxFreeOnly"));
     o.captureCap = bool(p.get("captureCap"));
+    o.gearHalfTax = bool(p.get("gearHalfTax"));
     o.requireMarginOverTax = bool(p.get("requireMarginOverTax"));
     o.rankPrices = rankPrices(p.get("rankPrices"));
     o.typicalVolumes = typical(p.get("typicalVolumes"));

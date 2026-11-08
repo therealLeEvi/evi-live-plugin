@@ -78,8 +78,8 @@ public final class ReleaseListingTest {
     String gradle = TestFiles.text(project.joinSegment("build.gradle"));
     Matcher v = Pattern.compile("(?m)^version = '([^']+)'").matcher(gradle);
     check(v.find(), "build.gradle has no version line");
-    check("4.0.0".equals(v.group(1)) && v.group(1).equals(props.getProperty("version")) && v.group(1).equals(WikiPriceClient.VERSION),
-      "ONE version, 4.0.0: build.gradle " + v.group(1) + ", listing " + props.getProperty("version") + ", User-Agent " + WikiPriceClient.VERSION);
+    check("4.0.1".equals(v.group(1)) && v.group(1).equals(props.getProperty("version")) && v.group(1).equals(WikiPriceClient.VERSION),
+      "ONE version, 4.0.1: build.gradle " + v.group(1) + ", listing " + props.getProperty("version") + ", User-Agent " + WikiPriceClient.VERSION);
     Matcher pin = Pattern.compile("def runeLiteVersion = '([^']+)'").matcher(gradle);
     check(pin.find() && pin.group(1).matches("\\d+\\.\\d+\\.\\d+"), "build.gradle pins an exact RuneLite release (match plugin-hub/runelite.version at release)");
   }

@@ -389,7 +389,7 @@ public final class Store {
       if (o != null && ("sell".equals(o.side()) || (!used.contains(o.offerId) && !personalUse.contains(o.offerId))))
         unseenOffers.add(new FifoMatcher.EndedUnseen(o, e.getValue()));
     }
-    FifoMatcher.Result auto = FifoMatcher.computeAutoFlips(pool, closed, unseenOffers);
+    FifoMatcher.Result auto = FifoMatcher.computeAutoFlips(pool, closed, unseenOffers, new ArrayList<>(offers.values()));
     List<ManualFlip> manual = new ArrayList<>(), removed = new ArrayList<>();
     for (ManualFlip f : flips) (f.isRemoved() ? removed : manual).add(f);
     // Two sums, then their sum: JS's order of additions, which matters only past 2^53 (see Js.add).

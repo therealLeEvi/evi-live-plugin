@@ -89,6 +89,8 @@ public final class EngineTranscriptTest {
     // step-down / further position asked only when the history has none (Y06, Y08), a reachable tie to the first found (X21),
     // and no tax bar on the market tier under "no minimum at all" (X26)
     "decide-stepdown-cash-capped", "decide-extras-history-before-market", "decide-reachable-cash-capped-tie", "decide-market-no-minimum-tax-bar",
+    // 15 Oct: the stretched-price warning on a market buy, and its silence on a dip
+    "decide-stretch-warning", "decide-stretch-dip-silent", "decide-patience-holding", "decide-patience-relist-quiet",
     "advice-buy-progress");
   private static final Set<String> replayed = new TreeSet<>();
 
@@ -256,7 +258,7 @@ public final class EngineTranscriptTest {
    */
   static Engine.Prefs prefsAt(Engine.Prefs boot, TranscriptDriver d) {
     java.util.List<Integer> blocked = d.blockedNow();
-    return blocked == null ? boot : new Engine.Prefs(boot.focus, blocked, boot.spread, boot.captureCap);
+    return blocked == null ? boot : new Engine.Prefs(boot.focus, blocked, boot.spread, boot.captureCap, boot.gearHalfTax);
   }
 
   /**
@@ -273,7 +275,7 @@ public final class EngineTranscriptTest {
     if (!java.util.Objects.equals(mine == null ? null : new java.util.TreeSet<>(mine), bridge == null ? null : new java.util.TreeSet<>(bridge)))
       throw new AssertionError(where + ": the plugin's per-character Block list " + mine + " is not the bridge's machine-wide " + bridge
         + " -- assert this per-account difference explicitly");
-    return mine == null ? boot : new Engine.Prefs(boot.focus, mine, boot.spread, boot.captureCap);
+    return mine == null ? boot : new Engine.Prefs(boot.focus, mine, boot.spread, boot.captureCap, boot.gearHalfTax);
   }
 
   /** The market snapshot as the bridge's caches held it at {@code at}. */
@@ -290,6 +292,8 @@ public final class EngineTranscriptTest {
     m.catalog = mapping == null ? null : ItemCatalog.parse(mapping);
     m.typicalVolumes = archive == null ? Collections.emptyMap() : MarketAggregates.typicalVolumesAt(archive, at);
     m.rankPrices = archive == null ? Collections.emptyMap() : MarketAggregates.robustPricesAt(archive, at);
+    m.stretch = archive == null ? Collections.emptyMap() : MarketAggregates.stretchBasisAt(archive, at);
+    m.patience = archive == null ? Collections.emptyMap() : MarketAggregates.patienceBasisAt(archive, at);
     m.recentHours = archive == null ? new ArrayList<>() : archive;
     m.thin = archive == null ? null : SafetyChecks.thinIndex(MarketAggregates.readArchive(archive, Math.floorDiv(at, 1000) - 14 * 86400L, Long.MAX_VALUE));
     m.crashWatch = watch;

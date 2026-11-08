@@ -48,6 +48,12 @@ public final class AdviceNotes {
     public CrashWatch.Watch crashWatch;
     /** The clock, in ms. */
     public double now;
+    /**
+     * The patient price (engine/Patience) for an item id, judged at the player's REAL pace, or null where that rule does not
+     * speak; null for none at all. A FUNCTION of market data, not a map, so these inputs still carry no collection a journal
+     * record could ride in on (scopingHoldsByConstruction): Relist asks it only about this account's own listings.
+     */
+    public java.util.function.IntFunction<Long> patience;
   }
 
   /** relistAdvice: [...crashNotes, ...sellNotes, ...buyNotes, ...relist, ...buyProgressNotes, ...holdingNotes]. */
@@ -71,7 +77,8 @@ public final class AdviceNotes {
       buyNotes.add(t);
     }
 
-    List<AdviceNote> relist = Relist.forAccount(view, in.marketLatest, in.targetDurationMinutes != null ? in.targetDurationMinutes : 1440, in.now);
+    List<AdviceNote> relist = Relist.forAccount(view, in.marketLatest, in.targetDurationMinutes != null ? in.targetDurationMinutes : 1440, in.now,
+      in.patience);
 
     List<AdviceNote> progressNotes = new ArrayList<>();
     for (AdviceNote n : BuyProgress.forAccount(view, in.targetDurationMinutes, in.slowFillItemIds == null ? new HashSet<>() : in.slowFillItemIds, in.now)) {

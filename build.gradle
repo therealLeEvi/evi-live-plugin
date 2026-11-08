@@ -22,14 +22,14 @@ repositories {
 // local check and then failed the Hub's build: 1.13.0 widened GrandExchangeOffer.getPrice() and
 // getSpent() from int to long. Read it before any release:
 //     curl -s https://raw.githubusercontent.com/runelite/plugin-hub/master/runelite.version
-def runeLiteVersion = '1.13.1'
+def runeLiteVersion = '1.13.6'
 dependencies {
     compileOnly "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:client:${runeLiteVersion}"
     testImplementation "net.runelite:jshell:${runeLiteVersion}"
 }
 group = 'com.evi'
-version = '4.0.0'
+version = '4.0.1'
 tasks.withType(JavaCompile).configureEach { options.encoding='UTF-8'; options.release.set(11) }
 tasks.register('run', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -327,6 +327,16 @@ tasks.register('shareInviteTest', JavaExec) {
     mainClass = 'com.evi.live.ShareInviteTest'
     systemProperty 'java.awt.headless', 'true'
 }
-tasks.named('check') { dependsOn 'observationTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest', 'riskSkipTest', 'journalIntentTest', 'journalVectorsTest', 'parityTest', 'pluginJournalTest', 'journalWiringTest', 'hubRulesTest', 'sidebarLinesTest', 'marketParityTest', 'marketIntentTest', 'marketMemoryTest', 'engineVectorsTest', 'engineIntentTest', 'tierVectorsTest', 'tierIntentTest', 'engineTranscriptTest', 'engineDecideIntentTest', 'adviceVectorsTest', 'adviceIntentTest', 'adviceTranscriptTest', 'marketTierVectorsTest', 'marketTierIntentTest', 'forecastVectorsTest', 'inProcessEngineTest', 'inProcessWiringTest', 'inProcessButtonsTest', 'inProcessStoresTest', 'releaseListingTest', 'tradeLogExportTest', 'shareInviteTest' }
+// 15 Oct 2026: the stretched-price WARNING (engine/Stretch): the basis, the reading, the words, the verdict line, buys only.
+tasks.register('stretchIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.StretchIntentTest'
+}
+// 23 Oct 2026: the PATIENT price on a holding below break-even (engine/Patience): the basis, the price, the card, the relist guard.
+tasks.register('patienceIntentTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.engine.PatienceIntentTest'
+}
+tasks.named('check') { dependsOn 'observationTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest', 'riskSkipTest', 'journalIntentTest', 'journalVectorsTest', 'parityTest', 'pluginJournalTest', 'journalWiringTest', 'hubRulesTest', 'sidebarLinesTest', 'marketParityTest', 'marketIntentTest', 'marketMemoryTest', 'engineVectorsTest', 'engineIntentTest', 'tierVectorsTest', 'tierIntentTest', 'engineTranscriptTest', 'engineDecideIntentTest', 'adviceVectorsTest', 'adviceIntentTest', 'adviceTranscriptTest', 'marketTierVectorsTest', 'marketTierIntentTest', 'forecastVectorsTest', 'inProcessEngineTest', 'inProcessWiringTest', 'inProcessButtonsTest', 'inProcessStoresTest', 'releaseListingTest', 'tradeLogExportTest', 'shareInviteTest', 'stretchIntentTest', 'patienceIntentTest' }
 // Test tasks log to the console only, never into the real ~/.runelite/logs/client.log (src/test/logback-tests.xml); `run` keeps RuneLite's.
 tasks.withType(JavaExec).matching { it.name != 'run' }.configureEach { systemProperty 'logback.configurationFile', file('src/test/logback-tests.xml').absolutePath }

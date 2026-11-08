@@ -22,7 +22,8 @@ public final class Pick {
   public final String action;
   public final long quantity;
   public final long buyPrice;
-  public final long sellPrice;
+  /** Not final: the patient price on a holding below break-even replaces it (engine/Patience), as the JS writes sellPrice. */
+  public long sellPrice;
   /** "personal", "holding" or "inventory" in the tiers ported so far ("market" and "scanner" later). */
   public final String source;
 
@@ -57,6 +58,10 @@ public final class Pick {
   /** The fill-history reading the thin-market index carried, when there was one. */
   public Integer fillHistoryHoursTraded;
   public Integer fillHistoryHours;
+  /** The stretched-price reading (engine/Stretch), on a buy quoted far above the item's usual price; null otherwise. */
+  public Stretch.Reading stretch;
+  /** The patient price (engine/Patience), on a holding whose quick sale is a loss; null otherwise. */
+  public Patience.Reading patience;
   /** Set by the Auto step-down: the minimum this pick fell below. */
   public Double belowUsualBar;
 

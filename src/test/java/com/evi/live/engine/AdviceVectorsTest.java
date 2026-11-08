@@ -381,7 +381,14 @@ public final class AdviceVectorsTest {
         }
         JsonElement t = field(o, "targetDurationMinutes");
         double target = isUndefined(t) ? 1440 : jsNumber(t);
-        return notes(Relist.relistAdvice(offers, prices(field(o, "prices")), idMap(field(o, "costBasis")), target, num(field(o, "now"))));
+        // patience (23 Oct): item id -> the patient price; absent = never, as the JS default.
+        Map<Integer, Double> pd = idMap(field(o, "patience"));
+        Map<Integer, Long> patience = null;
+        if (pd != null) {
+          patience = new java.util.LinkedHashMap<>();
+          for (Map.Entry<Integer, Double> e : pd.entrySet()) patience.put(e.getKey(), e.getValue() == null ? null : (long) (double) e.getValue());
+        }
+        return notes(Relist.relistAdvice(offers, prices(field(o, "prices")), idMap(field(o, "costBasis")), target, num(field(o, "now")), patience));
       }
       case "sellAdvice": {
         JsonElement o = arg(a, 0);

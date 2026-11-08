@@ -22,6 +22,18 @@ public final class Gates {
   public static final double MARGIN_TAX_NO_HISTORY_MULTIPLE = 1;
   /** MARGIN_TAX_WARN_MULTIPLE: below it a personal pick carries a warning. */
   public static final double MARGIN_TAX_WARN_MULTIPLE = 1;
+  /** GEAR_PRICE: at or above this quoted buy price the opt-in gear bar applies (2 Nov 2026, off unless switched on). */
+  public static final long GEAR_PRICE = 50000000L;
+  /** GEAR_NO_HISTORY_MULTIPLE: the no-history bar on gear with {@code gearHalfTax} on -- half the tax. */
+  public static final double GEAR_NO_HISTORY_MULTIPLE = 0.5;
+
+  /**
+   * noHistoryMultipleFor: the no-history bar for one item. With the opt-in gear switch on and a quoted buy of 50m or more,
+   * half the tax (never stricter than the level's own bar, which at LOW is the JS's 1); otherwise the level's bar.
+   */
+  public static double noHistoryMultipleFor(double buyPrice, boolean gearHalfTax, double noHistoryBar) {
+    return gearHalfTax && JsValues.isFinite(buyPrice) && buyPrice >= GEAR_PRICE ? Math.min(noHistoryBar, GEAR_NO_HISTORY_MULTIPLE) : noHistoryBar;
+  }
   /** IMPLAUSIBLE_MARGIN_MULTIPLE: a margin over five times the buy price, on an hour nobody traded, is a dead spread. */
   public static final double IMPLAUSIBLE_MARGIN_MULTIPLE = 5;
   /** BUY_PRINT_MULTIPLE: a buy print under half its own hour's average sell is a print, not a price. */

@@ -173,6 +173,20 @@ public class EviLiveHintTest {
     String shownOpenItem = fc.chatboxContainer.createdChildren.get(0).text;
     check(shownOpenItem.contains("210") && shownOpenItem.toLowerCase().contains("buy"), "Open-item fallback must show its buy price when there's no ranked suggestion for this item: " + shownOpenItem);
 
+    // 2 Nov 2026: an "Also worth buying" position for the open item wins over the plain price, because it carries a real
+    // quantity -- reported: the price filled for a 2nd/3rd position and the quantity did not.
+    cache.setExtras(java.util.Arrays.asList(EviLiveSuggestionTest.suggestion(998, "buy", 7, 1, 2),
+      EviLiveSuggestionTest.suggestion(999, "buy", 400, 205, 240)));
+    Suggestion extraResolved = geOffer.resolveOpenSuggestion(cache.get(), cache.extras(), openItemPriceCache.get());
+    check(extraResolved != null && extraResolved.itemId == 999 && extraResolved.quantity == 400,
+      "An extra position for the open item must resolve ahead of the quantity-less open-item price");
+    hint.update();
+    String shownExtra = fc.chatboxContainer.createdChildren.get(0).text;
+    check(shownExtra.contains("205"), "The hint must show the extra position's own buy price: " + shownExtra);
+    cache.setExtras(null);
+    hint.update();
+    check(fc.chatboxContainer.createdChildren.get(0).text.contains("210"), "With no extras the open-item fallback must return");
+
     // The reported loss: a held item sold through this fallback, which never knew what the player
     // paid, so the prompt offered their own buy price with no warning, and the sale lost exactly the
     // tax. (The figures below are invented; the shape is the report's.) Parsed exactly as the bridge now sends it (see

@@ -181,8 +181,17 @@ class GEOffer {
    * no hint and filled nothing at all, even though a live GE price for it was readily available.
    */
   Suggestion resolveOpenSuggestion(Suggestion ranked, Suggestion openItemPrice) {
+    return resolveOpenSuggestion(ranked, null, openItemPrice);
+  }
+
+  /** As above, with the "Also worth buying" positions checked after the main pick and before the
+   *  plain price (2 Nov 2026). Each extra is sized and priced by EVI exactly like the main pick, so its
+   *  quantity is real; before this, opening one of them fell through to openItemPrice, which has no
+   *  quantity, so the price filled and the quantity did not. */
+  Suggestion resolveOpenSuggestion(Suggestion ranked, java.util.List<Suggestion> extras, Suggestion openItemPrice) {
     int id = currentItemId();
     if (ranked != null && ranked.itemId == id) return ranked;
+    if (extras != null) for (Suggestion e : extras) if (e != null && e.itemId == id) return e;
     if (openItemPrice != null && openItemPrice.itemId == id) return openItemPrice;
     return null;
   }

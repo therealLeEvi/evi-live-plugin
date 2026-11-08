@@ -92,6 +92,8 @@ public final class MarketTier {
     public HourBucket volumes;
     /** The opt-in capture-curve cap (falsified 4 Oct, off by default). */
     public boolean captureCap;
+    /** The opt-in half-tax bar on 50m+ items (preferences {@code gearHalfTax}, 2 Nov 2026, off by default). */
+    public boolean gearHalfTax;
     /** Members world, focus and the buy limit left. */
     public Sizing.ItemGate gate = Sizing.ItemGate.NONE;
     /** The level whose bars apply; null is LOW (today the market tier reads the same bars at every level). */
@@ -148,7 +150,6 @@ public final class MarketTier {
     double maxPriceAge = JsValues.isFinite(o.maxPriceAgeMinutes) ? o.maxPriceAgeMinutes : Prices.MAX_PRICE_AGE_MINUTES;
     double volumeShare = JsValues.isFinite(o.maxVolumeShare) ? o.maxVolumeShare : Sizing.volumeShareForDuration(target == null ? Double.NaN : target);
     LevelSettings level = o.level == null ? LevelSettings.LOW : o.level;
-    double marginMultiple = o.marginTaxMultiple != null ? o.marginTaxMultiple : level.noHistoryMarginTaxMultiple;
     Sizing.SizingOptions sizing = new Sizing.SizingOptions(o.maxVolumeShare, o.volumeWindowShare, o.captureCap);
     Sizing.ItemGate gate = o.gate == null ? Sizing.ItemGate.NONE : o.gate;
     List<Candidate> candidates = new ArrayList<>();
@@ -170,6 +171,9 @@ public final class MarketTier {
       long net = Js.subtract(Js.subtract(p.high, p.low), tax);
       if (net <= 0) continue;
       // The tier that suggested the blood runes: an edge thinner than the item's own tax is not offered at all.
+      // (Half the tax on 50m+ gear with the opt-in gearHalfTax switch on -- see Gates.noHistoryMultipleFor.)
+      double marginMultiple = o.marginTaxMultiple != null ? o.marginTaxMultiple
+        : Gates.noHistoryMultipleFor(p.low, o.gearHalfTax, level.noHistoryMarginTaxMultiple);
       if (o.requireMarginOverTax && !Gates.marginClearsTax(net, tax, marginMultiple)) continue;
       // RANK on the steady price, QUOTE the live one -- and clear every bar on BOTH.
       MarketAggregates.RobustPrice r = o.rankPrices == null ? null : o.rankPrices.get(item.id);
@@ -327,6 +331,7 @@ public final class MarketTier {
       o.typicalVolumes = shared.typicalVolumes;
       o.volumes = shared.volumes;
       o.captureCap = shared.captureCap;
+      o.gearHalfTax = shared.gearHalfTax;
       o.gate = shared.gate;
       o.level = shared.level;
       return o;

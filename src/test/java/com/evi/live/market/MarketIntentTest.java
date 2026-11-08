@@ -280,7 +280,7 @@ public final class MarketIntentTest {
       check(String.format(UA, purposes[i]).equals(r.header("User-Agent")), "User-Agent was: " + r.header("User-Agent"));
       check("GET".equals(r.method()) && r.body() == null, "a GET with no body");
     }
-    check(WikiPriceClient.userAgent("x").startsWith("EVI-Live/4.0.0 (RuneLite plugin; x; +https://github.com/therealLeEvi/evi-live-plugin)"),
+    check(WikiPriceClient.userAgent("x").startsWith("EVI-Live/4.0.1 (RuneLite plugin; x; +https://github.com/therealLeEvi/evi-live-plugin)"),
       "the User-Agent names the plugin, its version and its public source page");
 
     // Never on the client thread, never on the EDT: refused BEFORE anything is sent.

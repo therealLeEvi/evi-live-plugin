@@ -195,7 +195,7 @@ public final class EviLiveDeliveryTest {
       public MinProfitTier minProfitThreshold(){return MinProfitTier.NONE;}
       public boolean marginSafetyCushion(){return false;}
     });
-    check("minProfit=1".equals(suggestionQuery.invoke(noFloor)),"\"No minimum at all\" must send the smallest positive floor, so the bridge leaves it alone");
+    check("minProfit=1".equals(suggestionQuery.invoke(noFloor)),"\"No minimum (high risk)\" must send the smallest positive floor, so the bridge leaves it alone");
     check(MinProfitTier.AUTO.gp()==0,"AUTO sends nothing and lets the bridge choose");
     // tradingProfile is RETIRED (6 Oct 2026): hidden, and never sent whatever is stored. Most
     // existing installs hold a stored STARTER (the old default, which RuneLite wrote into their

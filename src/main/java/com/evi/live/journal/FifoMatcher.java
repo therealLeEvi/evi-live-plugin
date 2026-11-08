@@ -3,6 +3,7 @@ package com.evi.live.journal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -265,6 +266,21 @@ public final class FifoMatcher {
    * would leave out of {@code offers} (manually matched, or marked personal use).
    */
   public static Result computeAutoFlips(List<Offer> offers, Map<String, Closed> closed, List<EndedUnseen> endedUnseen) {
+    return computeAutoFlips(offers, closed, endedUnseen, Collections.emptyList());
+  }
+
+  /**
+   * As above, with {@code listings}: every offer the journal has seen, any side and state (store.mjs passes
+   * {@code [...this.offers.values()]}), used only to tell whether a vanished listing was REPLACED (the maintainer, 27 Oct
+   * 2026): it stops covering anything once a LATER sell listing of the same account and item -- first seen after the
+   * vanished one was last seen -- lists at least every unit EVI thinks is still held (the open lots, plus whatever buys
+   * still running had filled). Everything was put back on the market, so the vanished listing cannot have sold any of it;
+   * a smaller relist proves nothing and leaves the mark. Empty: nothing is replaced, the 8 Oct behaviour.
+   */
+  public static Result computeAutoFlips(List<Offer> offers, Map<String, Closed> closed, List<EndedUnseen> endedUnseen,
+                                        List<Offer> listings) {
+    Set<String> unseenIds = new HashSet<>();
+    if (endedUnseen != null) for (EndedUnseen e : endedUnseen) if (e != null) unseenIds.add(e.offer.offerId);
     Map<String, List<Vanished>> vanished = new LinkedHashMap<>();
     if (endedUnseen != null) for (EndedUnseen s : endedUnseen) {
       if (s == null || !"sell".equals(s.offer.side()) || !(s.offer.total > 0)) continue;
@@ -333,7 +349,14 @@ public final class FifoMatcher {
         }
         if (remainingSellQty > 0) unmatched.add(new UnmatchedSell(o, remainingSellQty, OVERSOLD));
       }
-      List<Vanished> gone = vanished.getOrDefault(list.get(0).account + " " + list.get(0).itemId, Collections.emptyList());
+      String key = list.get(0).account + " " + list.get(0).itemId;
+      long held = 0;
+      for (Lot lot : lots) if (!closed.containsKey(lot.offerId) && lot.remaining > 0) held += lot.remaining;
+      if (listings != null) for (Offer b : listings)
+        if (b != null && "buy".equals(b.side()) && key.equals(b.account + " " + b.itemId) && !b.finished()
+          && !unseenIds.contains(b.offerId) && b.filled > 0) held += b.filled;
+      List<Vanished> gone = new ArrayList<>();
+      for (Vanished v : vanished.getOrDefault(key, Collections.emptyList())) if (!replaced(v, key, held, listings)) gone.add(v);
       for (Lot lot : lots) {
         if (closed.containsKey(lot.offerId)) {
           soldPart(lot, closed, flips);
@@ -357,6 +380,20 @@ public final class FifoMatcher {
       }
     }
     return new Result(flips, open, unmatched);
+  }
+
+  /**
+   * store.mjs {@code replaced}: a later sell listing of the same account and item, first seen after the vanished one was
+   * last seen ({@code updated ?? firstSeen}), for at least {@code held} units. (The vanished listing can never count as its
+   * own relist: it was first seen no later than it was last seen.)
+   */
+  private static boolean replaced(Vanished v, String key, long held, List<Offer> listings) {
+    if (listings == null) return false;
+    Offer s = v.s.offer;
+    double last = s.updated != null ? (double) s.updated : seen(s);
+    for (Offer l : listings)
+      if (l != null && "sell".equals(l.side()) && key.equals(l.account + " " + l.itemId) && seen(l) > last && l.total >= held) return true;
+    return false;
   }
 
   /** An offer's firstSeen as JS reads it: NaN when absent, so every comparison with it is false. */

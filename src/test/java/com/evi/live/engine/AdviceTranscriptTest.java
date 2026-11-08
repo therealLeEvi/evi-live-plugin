@@ -8,6 +8,7 @@ import com.evi.live.journal.StoreState;
 import com.evi.live.journal.TranscriptDriver;
 import com.evi.live.market.HourBucket;
 import com.evi.live.market.LatestPrices;
+import com.evi.live.market.MarketAggregates;
 import com.evi.live.market.WikiJson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -138,7 +139,7 @@ public final class AdviceTranscriptTest {
           throw new UncheckedIOException(e);
         }
       }
-      poll(name + " step " + i, at, query, response, store, wiki, watch);
+      poll(name + " step " + i, at, query, response, store, wiki, watch, archive);
     });
     d.run(steps);
     for (String x : d.diffs) diffs.add("[journal] " + x);
@@ -156,7 +157,8 @@ public final class AdviceTranscriptTest {
     return out;
   }
 
-  private static void poll(String where, long at, String query, JsonObject response, Store store, List<Wiki> wiki, CrashWatch.Watch watch) {
+  private static void poll(String where, long at, String query, JsonObject response, Store store, List<Wiki> wiki, CrashWatch.Watch watch,
+                           List<HourBucket> archive) {
     if (response.get("status").getAsInt() != 200) return;
     JsonObject body = response.getAsJsonObject("body");
     if (!body.has("relistAdvice")) return;
@@ -188,6 +190,15 @@ public final class AdviceTranscriptTest {
     in.suggestedItemId = isNullish(s) ? null : s.getAsJsonObject().get("itemId").getAsInt();
     in.crashWatch = watch;
     in.now = at;
+    // The patient price per item (engine/Patience), from the archive as the bridge's patienceBasisCached reads it, at the REAL pace.
+    java.util.Map<Integer, MarketAggregates.PatienceBasis> patienceBasis = archive == null ? null : MarketAggregates.patienceBasisAt(archive, at);
+    LatestPrices quotes = in.marketLatest;
+    Double pace = in.targetDurationMinutes;
+    in.patience = itemId -> {
+      ItemPrice p = Prices.lookupItemPrice(quotes, itemId);
+      Patience.Price r = Patience.price(patienceBasis == null ? null : patienceBasis.get(itemId), p == null ? Double.NaN : p.sellPrice, pace);
+      return r == null ? null : r.price;
+    };
     List<AdviceNote> notes = AdviceNotes.compose(in);
     JsonArray expected = body.getAsJsonArray("relistAdvice");
     for (String x : EngineJson.diff(expected, AdviceVectorsTest.notes(notes))) diffs.add(where + " relistAdvice" + x.substring(1));

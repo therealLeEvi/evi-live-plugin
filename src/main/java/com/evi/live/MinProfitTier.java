@@ -21,7 +21,9 @@ public enum MinProfitTier {
       case T1M: return "1m+";
       case T2M: return "2m+";
       // Appended after AUTO gained a small floor of its own: this is the way to say "really none".
-      case NONE: return "No minimum at all";
+      // "(high risk)" since 5 Nov 2026 (the maintainer): NONE also switches off the margin-over-tax bar, so it
+      // shows trades whose profit after tax is smaller than the tax itself. Label only; keyName and behaviour unchanged.
+      case NONE: return "No minimum (high risk)";
       default: return "Auto";
     }
   }

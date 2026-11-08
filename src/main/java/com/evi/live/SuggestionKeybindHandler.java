@@ -59,7 +59,7 @@ class SuggestionKeybindHandler {
   private void fill() {
     // Same eligibility gate the on-screen hint widget uses to decide what to show, so the hotkey
     // never fills a value the player wasn't also shown first.
-    Suggestion s = geOffer.resolveOpenSuggestion(suggestionCache.get(), openItemPriceCache.get());
+    Suggestion s = geOffer.resolveOpenSuggestion(suggestionCache.get(), suggestionCache.extras(), openItemPriceCache.get());
     switch (geOffer.openFieldFor(s)) {
       case QUANTITY: fillValue(s.quantity); break;
       case BUY_PRICE: fillValue(s.buyPrice); break;

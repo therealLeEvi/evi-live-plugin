@@ -67,11 +67,20 @@ public final class Relist {
    * items, against ITS OWN cost basis -- all three from the view. {@code targetDurationMinutes}: the player's pace, or 1440
    * when none is set (the bridge's {@code targetDurationMinutes ?? 1440}).
    */
-  public static List<AdviceNote> forAccount(AccountView view, LatestPrices marketLatest, double targetDurationMinutes, double now) {
+  // patientPrice: the patient price per item (engine/Patience) where that rule speaks now; a null function = never.
+  public static List<AdviceNote> forAccount(AccountView view, LatestPrices marketLatest, double targetDurationMinutes, double now,
+                                            java.util.function.IntFunction<Long> patientPrice) {
+    // server.mjs builds the map over this account's live sells only; so does this.
+    Map<Integer, Long> patience = new java.util.LinkedHashMap<>();
+    if (patientPrice != null)
+      for (Offer o : view.liveSells) {
+        Long p = patientPrice.apply(o.itemId);
+        if (p != null) patience.put(o.itemId, p);
+      }
     List<SellOffer> offers = new ArrayList<>();
     for (Offer o : view.liveSells)
       offers.add(new SellOffer(o.itemId, o.name, o.price, Math.max(0, o.total - o.filled), o.firstSeen == null ? null : (double) o.firstSeen));
-    return relistAdvice(offers, AdviceNotes.pricesFor(marketLatest, view.liveSells), view.costBasis, targetDurationMinutes, now);
+    return relistAdvice(offers, AdviceNotes.pricesFor(marketLatest, view.liveSells), view.costBasis, targetDurationMinutes, now, patience);
   }
 
   /**
@@ -84,6 +93,12 @@ public final class Relist {
    */
   static List<AdviceNote> relistAdvice(List<SellOffer> offers, Map<Integer, AdviceNote.Price> prices, Map<Integer, Double> costBasis,
                                               double targetDurationMinutes, double now) {
+    return relistAdvice(offers, prices, costBasis, targetDurationMinutes, now, null);
+  }
+
+  /** relistAdvice with {@code patience}: item id to the patient price where that rule speaks (null: never). */
+  static List<AdviceNote> relistAdvice(List<SellOffer> offers, Map<Integer, AdviceNote.Price> prices, Map<Integer, Double> costBasis,
+                                              double targetDurationMinutes, double now, Map<Integer, Long> patience) {
     double waitMinutes = Math.max(MIN_WAIT_MINUTES, targetDurationMinutes * RELIST_AFTER_SHARE);
     List<AdviceNote> out = new ArrayList<>();
     if (offers == null) return out;
@@ -102,7 +117,12 @@ public final class Relist {
       Long breakEven = paid != null && paid > 0 ? Tax.breakEvenSellPrice(offer.itemId, paid) : null;
       boolean marketUnderBreakEven = breakEven != null && market < breakEven;
       // Below break-even the early path speaks whatever the gap: the plugin's hint would say "take the current price".
-      boolean drifted = openMinutes >= DRIFT_MIN_WAIT_MINUTES
+      // EXCEPT an ask at or under the PATIENT price (Patience, 23 Oct 2026): the holding card tells the player to list there,
+      // and the market test found such listings usually sell within the hour, so the early path does not contradict it
+      // fifteen minutes later. The ordinary clock still speaks.
+      Long patient = patience == null ? null : patience.get(offer.itemId);
+      boolean patientAsk = marketUnderBreakEven && patient != null && patient > 0 && offer.price <= patient;
+      boolean drifted = !patientAsk && openMinutes >= DRIFT_MIN_WAIT_MINUTES
         && gap >= DRIFT_SPEAKS_NOW
         && (gap < PLUGIN_SPEAKS_ABOVE || marketUnderBreakEven);
       if (!pastTheClock && !drifted) continue;
@@ -127,9 +147,21 @@ public final class Relist {
         suggestedPrice = breakEven;
         message = head + " The market is now BELOW your break-even (" + JsValues.localeUs(breakEven) + " after tax), so relisting there would lock in a loss. Hold or cut -- EVI won't choose for you.";
       }
+      // ON THE CARD, not one hover away (28 Oct 2026, the maintainer: "if evi did it isn't clearly visible enough"). Below
+      // break-even the card's own line states how far the market is under break-even and, where the patience rule speaks,
+      // the day's typical high; the full sentence moves to the tooltip (detail). Still "hold or cut": nothing new advised.
+      String detail = null;
+      if (marketUnderBreakEven) {
+        detail = message;
+        String under = JsValues.toFixed((breakEven - market) / breakEven * 100, 1);
+        message = "Market is " + under + "% under your break-even of " + JsValues.localeUs(breakEven) + " after tax, so selling at it is a loss."
+          + (patient != null && patient > market ? " Typical high today: " + JsValues.localeUs(patient) + "." : "")
+          + " Hold or cut -- your call.";
+      }
       AdviceNote n = new AdviceNote(offer.itemId);
       n.name = offer.name;
       n.message = message;
+      n.detail = detail;
       n.offerPrice = offer.price;
       n.marketPrice = market;
       n.level = marketUnderBreakEven ? "warn" : "caution";

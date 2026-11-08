@@ -385,6 +385,7 @@ public class EviLivePlugin extends Plugin {
     p.riskLevel(config.riskLevelV2(),config.maxTradeShare());
     p.actions(false,false,false,false,false);
     p.onHoldingLine(this::holdingLinePersonalUse,this::holdingLineGone);
+    p.onPromote(this::promoteSuggestion);
     // Block is kept per character and undone in the panel's Blocked items list
     p.onUnblock(this::unblockItem);
     // the trade-log invitation at the bottom: shown unless "Not now" was pressed at this very version
@@ -620,7 +621,7 @@ public class EviLivePlugin extends Plugin {
     } catch(Throwable ignored){ inInstance=false; }
   }
 
-  private void reset(){ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
+  private void reset(){promotedItemId=-1;ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -1015,6 +1016,9 @@ public class EviLivePlugin extends Plugin {
         return;
       }
       correctSellQuantityAgainstInventory(s);
+      List<Suggestion> extras=r==null||r.additional==null?new ArrayList<>():new ArrayList<>(Arrays.asList(r.additional));
+      s=applyPromotion(s,extras);
+      suggestionCache.setExtras(extras);
       suggestionCache.set(s);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
       // A buy held back to keep room for the sells already owed is a different answer from nothing
@@ -1033,8 +1037,7 @@ public class EviLivePlugin extends Plugin {
       if(panel!=null)panel.skipped(setAsideCount());
       // The second and third positions, when asked for. An older bridge sends none and the section
       // stays hidden; so does a default install, which never asks for more than one.
-      if(panel!=null)panel.alsoSuggested(r==null||r.additional==null
-        ?java.util.Collections.emptyList():java.util.Arrays.asList(r.additional));
+      if(panel!=null)panel.alsoSuggested(extras,s!=null&&"buy".equals(s.action));
       if(panel!=null)panel.profit(r==null?null:r.profit);
       updatePanelOfferHint(activeOffers,r==null?null:r.slotPrices,r==null?null:r.slotFill,r==null?null:r.relistAdvice,r==null?null:r.sellBreakEven);
     } catch(Throwable ex){
@@ -1079,6 +1082,34 @@ public class EviLivePlugin extends Plugin {
     Set<Integer> all=new java.util.HashSet<>(skippedItemIds);
     all.addAll(skipMemory.active());
     return all.size();
+  }
+
+  // "Also worth buying" -> "I'm taking this one" (2 Nov 2026). The item the player clicked among the extra positions,
+  // or -1. While EVI still offers it (as the main pick or an extra), it is drawn as the main card: Skip, Block, the GE hint
+  // and the quantity fill then act on it, and the old main pick moves to the top of the extras. Nothing is sent anywhere and
+  // nothing EVI ranks changes; it is a display choice. It ends by itself once EVI stops offering the item (an offer placed
+  // for it, a Skip, the market moving), so a stale choice can never hold the card.
+  private volatile int promotedItemId=-1;
+
+  /** Swaps the clicked extra into the main slot, in place; returns the suggestion to show as the main card. Only over a BUY:
+   *  a holding's sell is never displaced by a buy (the extras list draws buys only). Package-private for tests. */
+  Suggestion applyPromotion(Suggestion main, List<Suggestion> extras) {
+    int want=promotedItemId;
+    if(want<0)return main;
+    if(main!=null && main.itemId==want)return main;
+    int at=-1;
+    for(int i=0;i<extras.size();i++){Suggestion e=extras.get(i);if(e!=null&&e.itemId==want){at=i;break;}}
+    if(at<0){promotedItemId=-1;return main;}
+    if(main==null || !"buy".equals(main.action))return main;
+    Suggestion chosen=extras.remove(at);
+    extras.add(0,main);
+    return chosen;
+  }
+
+  // Called only from a click on an "Also worth buying" card (Swing EDT). Re-polls at once so the swap is immediate.
+  private void promoteSuggestion(int itemId) {
+    promotedItemId=itemId;
+    if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
 
   private void skipSuggestion() {
@@ -1595,6 +1626,7 @@ public class EviLivePlugin extends Plugin {
       +" can do right now is %s, at about %,d gp. Lower the minimum to see trades like it.",item,r.profit);
   }
   private void updatePanelSuggestion(Suggestion s, String diag) {
+    if(s==null)suggestionCache.setExtras(null); // no main pick, no extras: a stale extra must never fill a quantity
     if(panel==null)return;
     if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);panel.actions(false,false,false,false,false);return;}
     // The accept button only appears when the bridge issued an id for this suggestion. An older

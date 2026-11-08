@@ -130,6 +130,33 @@ public class EviLiveSuggestionTest {
   }
 
   /** buyPrice and sellPrice are always both set, matching what the bridge actually sends now. */
+  // 2 Nov 2026: clicking an "Also worth buying" card draws that item as the main card (EviLivePlugin.applyPromotion).
+  static void promotionCases() throws Exception {
+    EviLivePlugin p = new EviLivePlugin();
+    java.lang.reflect.Field f = EviLivePlugin.class.getDeclaredField("promotedItemId");
+    f.setAccessible(true);
+    Suggestion main = suggestion(1, "buy", 10, 100, 120), two = suggestion(2, "buy", 20, 200, 230), three = suggestion(3, "buy", 30, 300, 340);
+
+    java.util.List<Suggestion> extras = new java.util.ArrayList<>(java.util.Arrays.asList(two, three));
+    check(p.applyPromotion(main, extras) == main && extras.get(0) == two && extras.get(1) == three, "No click: nothing moves");
+
+    f.setInt(p, 3);
+    extras = new java.util.ArrayList<>(java.util.Arrays.asList(two, three));
+    check(p.applyPromotion(main, extras) == three, "The clicked third position becomes the main card");
+    check(extras.size() == 2 && extras.get(0) == main && extras.get(1) == two, "The old main pick heads the extras: " + extras);
+    check(f.getInt(p) == 3, "The choice holds while EVI still offers the item");
+
+    extras = new java.util.ArrayList<>(java.util.Arrays.asList(two, three));
+    Suggestion sell = suggestion(1, "sell", 10, 100, 120);
+    check(p.applyPromotion(sell, extras) == sell && extras.get(0) == two, "A buy never displaces a holding's sell");
+
+    extras = new java.util.ArrayList<>(java.util.Arrays.asList(two));
+    check(p.applyPromotion(three, extras) == three && f.getInt(p) == 3, "Already the main pick: left as it is");
+
+    extras = new java.util.ArrayList<>(java.util.Arrays.asList(two));
+    check(p.applyPromotion(main, extras) == main && f.getInt(p) == -1, "Once EVI stops offering the item, the choice ends");
+  }
+
   static Suggestion suggestion(int itemId, String action, int quantity, int buyPrice, int sellPrice) {
     Suggestion s = new Suggestion();
     s.itemId = itemId; s.action = action; s.quantity = quantity; s.buyPrice = buyPrice; s.sellPrice = sellPrice; s.name = "Test item"; s.source = "personal";
@@ -145,6 +172,7 @@ public class EviLiveSuggestionTest {
   }
 
   public static void main(String[] args) throws Exception {
+    promotionCases();
     // The bridge's real JSON shape must still deserialize into the plugin's field names, including
     // the separate openItemPrice field (a plain {itemId, buyPrice, sellPrice} shape -- no name,
     // action, quantity, source, or reasoning -- see OpenItemPriceCache's own class doc).

@@ -63,7 +63,7 @@ All of these are in RuneLite's settings under EVI Live. The defaults are a sensi
 
 | setting | default | what it does |
 | --- | --- | --- |
-| Min predicted profit | Auto | Skips suggestions predicted to make less than this. Auto scales with your cash. |
+| Min predicted profit | Auto | Skips suggestions predicted to make less than this. Auto scales with your cash. *No minimum (high risk)* also shows trades whose profit after tax is smaller than the tax itself, which a small price move can turn into a loss. |
 | Trade pace | No preference | How long you will wait for one trade. Longer paces allow bigger, slower trades. |
 | Max share of cash per trade | 25% of cash | The most of your cash one market-wide suggestion may use. |
 | Suggestion focus | All items | Gear, bulk consumables and ammo, or everything. Sales are unaffected. |

@@ -154,15 +154,22 @@ public final class Engine {
      */
     public final double spread;
     public final boolean captureCap;
+    /** The opt-in half-tax margin bar on 50m+ items in the no-history tiers (2 Nov 2026; see Gates.noHistoryMultipleFor). */
+    public final boolean gearHalfTax;
 
     private static final double MAX_SAFE_INTEGER = 9007199254740991.0;
-    public static final Prefs DEFAULT = new Prefs("any", Collections.emptyList(), 5, false);
+    public static final Prefs DEFAULT = new Prefs("any", Collections.emptyList(), 5, false, false);
 
     public Prefs(String focus, List<Integer> blocked, double spread, boolean captureCap) {
+      this(focus, blocked, spread, captureCap, false);
+    }
+
+    public Prefs(String focus, List<Integer> blocked, double spread, boolean captureCap, boolean gearHalfTax) {
       this.focus = Focus.FOCUSES.contains(focus) ? focus : "any";
       this.blocked = Collections.unmodifiableList(new ArrayList<>(blocked == null ? Collections.emptyList() : blocked));
       this.spread = JsValues.isInteger(spread) && Math.abs(spread) <= MAX_SAFE_INTEGER ? Math.min(10, Math.max(1, spread)) : 5;
       this.captureCap = captureCap;
+      this.gearHalfTax = gearHalfTax;
     }
 
     /**
@@ -186,7 +193,9 @@ public final class Engine {
       Double spread = safeInteger(o.get("spread"));
       JsonElement c = o.get("captureCap");
       boolean captureCap = c != null && c.isJsonPrimitive() && c.getAsJsonPrimitive().isBoolean() && c.getAsBoolean();
-      return new Prefs(focus, blocked, spread == null ? Double.NaN : spread, captureCap);
+      JsonElement g = o.get("gearHalfTax");
+      boolean gearHalfTax = g != null && g.isJsonPrimitive() && g.getAsJsonPrimitive().isBoolean() && g.getAsBoolean();
+      return new Prefs(focus, blocked, spread == null ? Double.NaN : spread, captureCap, gearHalfTax);
     }
 
     private static Double safeInteger(JsonElement x) {
@@ -250,6 +259,10 @@ public final class Engine {
     public Map<Integer, Long> typicalVolumes;
     /** {@code robustPricesCached()}: the 336-hour steady price per item; empty or null ranks on the live quote. */
     public Map<Integer, MarketAggregates.RobustPrice> rankPrices;
+    /** {@code stretchBasisForRequest()}: the stretched-price basis per item (engine/Stretch); null before the first build (no warning). */
+    public Map<Integer, MarketAggregates.StretchBasis> stretch;
+    /** {@code patienceBasisForRequest()}: the patient-price basis per item (engine/Patience); null before the first build (the card as before). */
+    public Map<Integer, MarketAggregates.PatienceBasis> patience;
     /** {@code archive.recentHourly()}: the archive's last hours, for the sell-support reading (filtered to its window here). */
     public List<HourBucket> recentHours;
     /** {@code thinMarketIndex()}: null when the archive is too short to have one. */
@@ -780,10 +793,28 @@ public final class Engine {
       advice.suggestedItemId = suggestion == null ? null : suggestion.itemId;
       advice.crashWatch = market.crashWatch;
       advice.now = now;
+      // The patient price per item (server.mjs's relistAdvice call), judged at the player's REAL pace (none = no patience):
+      // market data only, asked by Relist about this account's own listings.
+      final LatestPrices quotes = latest;
+      final Double pace = target;
+      final Map<Integer, MarketAggregates.PatienceBasis> patienceBasis = market.patience;
+      advice.patience = itemId -> {
+        ItemPrice p = Prices.lookupItemPrice(quotes, itemId);
+        Patience.Price r = Patience.price(patienceBasis == null ? null : patienceBasis.get(itemId), p == null ? Double.NaN : p.sellPrice, pace);
+        return r == null ? null : r.price;
+      };
       out.relistAdvice = AdviceNotes.compose(advice);
       // --- the headline enrichment, the primary with its fill-history reading and every extra position without one
+      // (the stretched-price warning first, as server.mjs's enrich: a line and a sentence on a buy, never a block)
+      Stretch.apply(suggestion, market.stretch);
+      // (then the patient price on a holding below break-even, before the verdict that shows its line: patience.mjs)
+      Patience.apply(suggestion, market.patience, target);
       Verdict.enrich(suggestion, thinStats == null ? null : (int) thinStats.hoursTraded, thinStats == null ? null : (int) thinStats.hours);
-      for (Pick a : out.additional) Verdict.enrich(a, null, null);
+      for (Pick a : out.additional) {
+        Stretch.apply(a, market.stretch);
+        Patience.apply(a, market.patience, target);
+        Verdict.enrich(a, null, null);
+      }
 
       out.suggestion = suggestion;
       out.slots = new Slots(capacity, sellSlotsOwed, buysHeldForExits, positionItems);
@@ -823,6 +854,7 @@ public final class Engine {
       shared.rankBy = level.marketRankBy;
       shared.typicalVolumes = market.typicalVolumes;
       shared.captureCap = prefs.captureCap;
+      shared.gearHalfTax = prefs.gearHalfTax;
       if (bigger) {
         shared.volumeWindowShare = Policy.BIGGER_POSITIONS_WINDOW_SHARE;
         shared.minVolumeInWindow = Policy.BIGGER_POSITIONS_MIN_VOLUME_IN_WINDOW;
@@ -973,7 +1005,7 @@ public final class Engine {
           SellSupport.Detail detail = hooks.sellSeries == null
             ? SellSupport.readingFromArchive(archivedSince(), cand.itemId, cand.buyPrice, now)
             : SellSupport.reading(seriesFor(cand.itemId), archivedSince(), cand.itemId, cand.buyPrice, now);
-          return SellSupport.judge(detail, cand, rankedAt, minProfitChosen, requireMarginOverTax, level);
+          return SellSupport.judge(detail, cand, rankedAt, minProfitChosen, requireMarginOverTax, level, prefs.gearHalfTax);
         } catch (Exception e) {
           return null;
         }

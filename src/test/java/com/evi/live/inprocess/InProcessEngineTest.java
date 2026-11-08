@@ -188,7 +188,7 @@ public final class InProcessEngineTest {
       @Override public EngineFeed.Market market(long nowMs) {
         EngineFeed.Market m = t.market(nowMs);
         long fetched = staleRun ? nowMs - InProcessEngine.STALE_PRICES_MS - 1 : m.latestFetchedAtMs;
-        return new EngineFeed.Market(m.latest, fetched, m.latestHour, m.catalog, m.typical, m.robust, m.newestStoredTs, readings, window,
+        return new EngineFeed.Market(m.latest, fetched, m.latestHour, m.catalog, m.typical, m.robust, m.stretch, m.patience, m.newestStoredTs, readings, window,
           m.robustHours, m.typicalHours, m.archiveRevision, 0, readings < window, readings);
       }
 

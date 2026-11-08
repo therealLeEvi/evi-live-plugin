@@ -75,6 +75,8 @@ public final class Verdict {
       List<Line> l = new ArrayList<>();
       l.add(new Line(false, "Down " + gp(s.lossIfSoldNow) + " gp at today's price"));
       if (s.breakEvenPrice != null) l.add(new Line(null, "Break-even after tax: " + gp(s.breakEvenPrice)));
+      // The patient listing price (Patience), when the rule spoke: neutral, the player's choice either way.
+      if (s.patience != null) l.add(new Line(null, Patience.line(s.patience)));
       return new Result(WARN, "Selling now is a loss", l);
     }
     // A holding whose sell listing ENDED while EVI was not watching (8 Oct, a real case): it may have sold. Never a
@@ -99,6 +101,13 @@ public final class Verdict {
       checks.add(new Line(null, "No buy on record, so no profit is claimed"));
       level = CLEAR.equals(level) ? CAUTION : level;
       label = label != null ? label : "Not bought through EVI";
+    }
+    // A buy quoted far above the item's own usual price (Stretch): FIRST among the buy lines so the four-line cap never drops
+    // it, and CAUTION -- a warning about the price, never a block. The label only fills an empty one.
+    if (s.isBuy() && s.stretch != null) {
+      checks.add(new Line(false, Stretch.line(s.stretch)));
+      level = CLEAR.equals(level) ? CAUTION : level;
+      label = label != null ? label : "Price well above usual";
     }
     // The margin at the price buyers have actually been paying, against the quoted spread.
     SellSupport.Detail support = s.sellSupport;
@@ -173,6 +182,9 @@ public final class Verdict {
     if (support != null && SellSupport.supportIsStale(support)) support.stale = true;
     s.quotedProfit = quoted;
     // Idle stock, and a holding whose listing ended unseen: neither has a profit EVI can state.
-    s.expectedProfit = "inventory".equals(s.source) || s.endedUnseen != null ? null : Policy.headlineProfit(quoted, supported);
+    // A holding quoted at its patient price headlines what listing there would net over what was PAID, not the spread.
+    s.expectedProfit = "inventory".equals(s.source) || s.endedUnseen != null ? null
+      : s.patience != null ? Long.valueOf(s.patience.net)
+      : Policy.headlineProfit(quoted, supported);
   }
 }

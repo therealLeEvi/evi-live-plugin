@@ -146,6 +146,20 @@ public final class ResponseJson {
       fh.add("hours", number(p.fillHistoryHours));
       j.add("fillHistory", fh);
     }
+    if (p.stretch != null) {
+      JsonObject st = new JsonObject();
+      st.add("level", number(p.stretch.level));
+      st.add("abovePct", number(p.stretch.abovePct));
+      j.add("stretch", st);
+    }
+    if (p.patience != null) {
+      JsonObject pa = new JsonObject();
+      pa.add("price", number(p.patience.price));
+      pa.add("quickPrice", number(p.patience.quickPrice));
+      pa.add("typicalHigh", number(p.patience.typicalHigh));
+      pa.add("net", number(p.patience.net));
+      j.add("patience", pa);
+    }
     if (p.verdict != null) j.add("verdict", verdict(p.verdict));
     put(j, "quotedProfit", p.quotedProfit);
     put(j, "expectedProfit", p.expectedProfit);

@@ -47,7 +47,7 @@ public final class WikiPriceClient {
    * runelite-plugin.properties; {@code MarketIntentTest.oneNetworkClass} fails the build when it does not, so it cannot drift
    * the way an older User-Agent version once did.
    */
-  public static final String VERSION = "4.0.0";
+  public static final String VERSION = "4.0.1";
   /** Where the source lives: the contact point the Wiki asks for, and nothing that is not already public. */
   static final String HOME = "https://github.com/therealLeEvi/evi-live-plugin";
 

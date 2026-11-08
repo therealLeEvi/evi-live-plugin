@@ -92,7 +92,7 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "minProfitTier",
     name = "Min predicted profit",
-    description = "Skips suggestions predicted to make less than this. Auto scales with your cash stack.",
+    description = "Skips smaller trades. Auto scales with your cash. High risk adds thin trades a small dip can turn into a loss.",
     section = tradeSection,
     position = 11
   )

@@ -58,7 +58,7 @@ class SuggestionHintWidget {
       hint = create(parent);
       if (hint == null) return;
     }
-    Suggestion s = geOffer.resolveOpenSuggestion(suggestionCache.get(), openItemPriceCache.get());
+    Suggestion s = geOffer.resolveOpenSuggestion(suggestionCache.get(), suggestionCache.extras(), openItemPriceCache.get());
     GEOffer.PromptField field = geOffer.openFieldFor(s);
     hint.setText(field == GEOffer.PromptField.NONE ? "" : label(field, s));
     hint.revalidate();

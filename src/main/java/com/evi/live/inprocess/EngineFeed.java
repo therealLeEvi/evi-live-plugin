@@ -75,6 +75,10 @@ public final class EngineFeed {
     /** Null before the first build: the engine then sizes on the live hour, as the bridge does before its cache is warm. */
     public final Map<Integer, Long> typical;
     public final Map<Integer, MarketAggregates.RobustPrice> robust;
+    /** The stretched-price basis (engine/Stretch); null before the first build, when no buy is warned (as the bridge's cold cache). */
+    public final Map<Integer, MarketAggregates.StretchBasis> stretch;
+    /** The patient-price basis (engine/Patience); null before the first build, when no holding is re-priced (as the bridge's cold cache). */
+    public final Map<Integer, MarketAggregates.PatienceBasis> patience;
     public final long newestStoredTs;
     public final int hoursStored, windowHours, robustHours, typicalHours;
     /** {@link MarketSnapshot#archiveRevision}: moves whenever the price layer learns of another hour, older ones included. */
@@ -97,6 +101,17 @@ public final class EngineFeed {
     public Market(LatestPrices latest, long latestFetchedAtMs, HourBucket latestHour, ItemCatalog catalog, Map<Integer, Long> typical,
                   Map<Integer, MarketAggregates.RobustPrice> robust, long newestStoredTs, int hoursStored, int windowHours, int robustHours, int typicalHours,
                   long archiveRevision, int hoursUnavailable, boolean catchingUp, int readingsHoursStored) {
+      this(latest, latestFetchedAtMs, latestHour, catalog, typical, robust, null, null, newestStoredTs, hoursStored, windowHours, robustHours,
+        typicalHours, archiveRevision, hoursUnavailable, catchingUp, readingsHoursStored);
+    }
+
+    /** The full constructor: every reading, the stretched-price and patient-price bases included. Test rigs that rebuild a Market must use this one. */
+    public Market(LatestPrices latest, long latestFetchedAtMs, HourBucket latestHour, ItemCatalog catalog, Map<Integer, Long> typical,
+                  Map<Integer, MarketAggregates.RobustPrice> robust, Map<Integer, MarketAggregates.StretchBasis> stretch,
+                  Map<Integer, MarketAggregates.PatienceBasis> patience, long newestStoredTs, int hoursStored, int windowHours, int robustHours,
+                  int typicalHours, long archiveRevision, int hoursUnavailable, boolean catchingUp, int readingsHoursStored) {
+      this.stretch = stretch;
+      this.patience = patience;
       this.latest = latest;
       this.latestFetchedAtMs = latestFetchedAtMs;
       this.latestHour = latestHour;
@@ -117,7 +132,8 @@ public final class EngineFeed {
     /** From the price layer's published snapshot. */
     public static Market of(MarketSnapshot s, long nowMs) {
       boolean built = s.readingsBuiltAtMs != 0;
-      return new Market(s.latest, s.latestFetchedAtMs, s.latestHour(nowMs), s.catalog, built ? s.typical : null, s.robust, s.newestStoredTs,
+      return new Market(s.latest, s.latestFetchedAtMs, s.latestHour(nowMs), s.catalog, built ? s.typical : null, s.robust,
+        built ? s.stretch : null, built ? s.patience : null, s.newestStoredTs,
         s.hoursStored, s.windowHours, s.robustHours, s.typicalHours, s.archiveRevision, s.hoursUnavailable, s.catchingUp, s.readingsHoursStored);
     }
   }
@@ -158,6 +174,8 @@ public final class EngineFeed {
     d.catalog = m.catalog;
     d.typicalVolumes = m.typical;
     d.rankPrices = m.robust;
+    d.stretch = m.stretch;
+    d.patience = m.patience;
     d.recentHours = recentHours;
     d.thin = thin;
     d.crashWatch = null;
@@ -217,7 +235,7 @@ public final class EngineFeed {
     if (extra == null || extra.isEmpty()) return prefs;
     java.util.TreeSet<Integer> all = new java.util.TreeSet<>(prefs.blocked);
     for (Integer id : extra) if (id != null && id > 0) all.add(id);
-    return new Engine.Prefs(prefs.focus, new java.util.ArrayList<>(all), prefs.spread, prefs.captureCap);
+    return new Engine.Prefs(prefs.focus, new java.util.ArrayList<>(all), prefs.spread, prefs.captureCap, prefs.gearHalfTax);
   }
 
   /** Waits for a layer's answer on the CALLER's thread (a consumer's own), bounded. A null future: the layer is not running. */

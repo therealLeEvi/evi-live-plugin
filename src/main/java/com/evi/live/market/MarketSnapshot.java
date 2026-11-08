@@ -21,6 +21,10 @@ public final class MarketSnapshot {
   /** Robust prices and typical volumes, from the last {@link MarketAggregates#build}; empty before the first. */
   public final Map<Integer, MarketAggregates.RobustPrice> robust;
   public final Map<Integer, Long> typical;
+  /** The stretched-price basis (engine/Stretch), from the same build; empty before the first. */
+  public final Map<Integer, MarketAggregates.StretchBasis> stretch;
+  /** The patient-price basis (engine/Patience), from the same build; empty before the first. */
+  public final Map<Integer, MarketAggregates.PatienceBasis> patience;
   public final int robustHours;
   public final int typicalHours;
   public final long readingsBuiltAtMs;
@@ -62,6 +66,8 @@ public final class MarketSnapshot {
     this.newestHour = newestHour;
     this.robust = readings == null ? Collections.emptyMap() : readings.robust;
     this.typical = readings == null ? Collections.emptyMap() : readings.typical;
+    this.stretch = readings == null ? Collections.emptyMap() : readings.stretch;
+    this.patience = readings == null ? Collections.emptyMap() : readings.patience;
     this.robustHours = readings == null ? 0 : readings.robustHours;
     this.typicalHours = readings == null ? 0 : readings.typicalHours;
     this.readingsBuiltAtMs = readingsBuiltAtMs;

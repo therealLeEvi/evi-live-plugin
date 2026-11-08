@@ -59,6 +59,13 @@ public final class EngineDecideIntentTest {
       "blocked keeps positive safe whole ids in item range, in order: " + prefs("{\"blocked\":[561,-1,0,2.5,4294967857,\"4151\",565]}").blocked);
     ok(prefs("{\"captureCap\":true}").captureCap && !prefs("{\"captureCap\":\"true\"}").captureCap && !prefs("{\"captureCap\":1}").captureCap,
       "captureCap only when it is literally true");
+    ok(prefs("{\"gearHalfTax\":true}").gearHalfTax && !prefs("{\"gearHalfTax\":\"true\"}").gearHalfTax && !prefs("{\"gearHalfTax\":1}").gearHalfTax
+        && !prefs("{}").gearHalfTax && !Engine.Prefs.DEFAULT.gearHalfTax,
+      "gearHalfTax only when it is literally true, and off by default");
+    ok(Gates.GEAR_PRICE == 50000000L && Gates.GEAR_NO_HISTORY_MULTIPLE == 0.5
+        && Gates.noHistoryMultipleFor(50000000, true, 1) == 0.5 && Gates.noHistoryMultipleFor(49999999, true, 1) == 1
+        && Gates.noHistoryMultipleFor(300000000, false, 1) == 1 && Gates.noHistoryMultipleFor(Double.NaN, true, 1) == 1,
+      "the gear bar: half the tax at 50m and up, only with the switch on (values pinned, as bridge/suggestions.mjs)");
     ok(prefs("null").spread == 5 && prefs("[1,2]").spread == 5 && prefs("7").spread == 5, "anything that is not an object reads as the defaults");
   }
 

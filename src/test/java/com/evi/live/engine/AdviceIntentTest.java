@@ -85,8 +85,11 @@ public final class AdviceIntentTest {
     AdviceNote n = under.get(0);
     check("warn".equals(n.level) && Boolean.TRUE.equals(n.belowBreakEven) && "Market moved away".equals(n.label), "a below-break-even ask is a WARNING");
     check(n.suggestedPrice == 1020 && n.breakEven == 1020, "it names the break-even, never the market, as the price: " + n.suggestedPrice);
-    check(n.message.contains("BELOW your break-even (1,020 after tax), so relisting there would lock in a loss"), n.message);
-    check(!n.message.toLowerCase(Locale.ROOT).contains("take the current price"), "it never tells the player to take the market");
+    // 28 Oct 2026: the full sentence is the card's tooltip (detail); the card's own line states the gap and the break-even.
+    check(n.detail != null && n.detail.contains("BELOW your break-even (1,020 after tax), so relisting there would lock in a loss"), n.detail);
+    check("Market is 2.9% under your break-even of 1,020 after tax, so selling at it is a loss. Hold or cut -- your call.".equals(n.message), n.message);
+    check(!n.message.toLowerCase(Locale.ROOT).contains("take the current price") && !n.detail.toLowerCase(Locale.ROOT).contains("take the current price"),
+      "it never tells the player to take the market");
     // The same 32% gap ABOVE break-even is the plugin's to say until the clock runs out.
     check(Relist.relistAdvice(List.of(sell(1400, 15)), market(990), paid(900), 2880, NOW).isEmpty(), "above break-even past 5% stays with the plugin's hint");
     check(Relist.relistAdvice(List.of(sell(1400, 720)), market(990), paid(900), 2880, NOW).size() == 1, "...and speaks once the clock has run");

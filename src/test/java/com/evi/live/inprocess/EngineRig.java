@@ -170,7 +170,9 @@ public final class EngineRig {
         long newest = Long.MIN_VALUE;
         if (archive != null) for (HourBucket b : archive) newest = Math.max(newest, b.ts);
         return new EngineFeed.Market(l, fetchedAt(API + "latest"), h, c, archive == null ? Collections.emptyMap() : MarketAggregates.typicalVolumesAt(archive, nowMs),
-          archive == null ? Collections.emptyMap() : MarketAggregates.robustPricesAt(archive, nowMs), newest, 0, 0, 0, 0, revision.get());
+          archive == null ? Collections.emptyMap() : MarketAggregates.robustPricesAt(archive, nowMs),
+          archive == null ? Collections.emptyMap() : MarketAggregates.stretchBasisAt(archive, nowMs),
+          archive == null ? Collections.emptyMap() : MarketAggregates.patienceBasisAt(archive, nowMs), newest, 0, 0, 0, 0, revision.get(), 0, false, 0);
       } catch (IOException e) {
         throw new IllegalStateException(e);
       }

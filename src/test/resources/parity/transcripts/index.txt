@@ -42,6 +42,8 @@ decide-market-stepdown-held-back
 decide-no-minimum-support-thin
 decide-open-item-held-quantity
 decide-open-item-running-buy-basis
+decide-patience-holding
+decide-patience-relist-quiet
 decide-query-repeated-name
 decide-reachable-after-three-held-back
 decide-reachable-best-of-both-tiers
@@ -53,9 +55,12 @@ decide-reachable-market-source-only
 decide-slot-reserve-uncollected-sell
 decide-source-market-skips-history
 decide-stepdown-cash-capped
+decide-stretch-dip-silent
+decide-stretch-warning
 decide-thin-index-retried
 duplicate-and-stale-seq
 ended-unseen-buy
+ended-unseen-replaced
 ended-unseen-sell
 fifo-two-lots
 flip-basic

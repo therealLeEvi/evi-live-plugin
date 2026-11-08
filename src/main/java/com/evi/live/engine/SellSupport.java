@@ -295,12 +295,19 @@ public final class SellSupport {
    * </ul>
    */
   public static Result judge(Detail detail, Pick candidate, double minProfit, boolean minProfitChosen, boolean requireMarginOverTax, LevelSettings level) {
+    return judge(detail, candidate, minProfit, minProfitChosen, requireMarginOverTax, level, false);
+  }
+
+  /** As above, with the opt-in gear switch: a non-personal pick quoted at 50m+ is held to half the tax (Gates.noHistoryMultipleFor). */
+  public static Result judge(Detail detail, Pick candidate, double minProfit, boolean minProfitChosen, boolean requireMarginOverTax, LevelSettings level,
+                             boolean gearHalfTax) {
     String warning = sellSupportNote(detail, candidate.sellPrice);
     if (detail != null && detail.netAtAverage != null && JsValues.isFinite(detail.netAtAverage)) {
       double qty = candidate.quantity != 0 ? candidate.quantity : 1; // candidate.quantity || 1
       double supportedTotal = detail.netAtAverage * qty;
       double taxAtSupport = Tax.estimateUnitTax(candidate.itemId, nullAsZero(detail.averagePaid));
-      double bar = "personal".equals(candidate.source) ? level.historyMarginTaxMultiple : level.noHistoryMarginTaxMultiple;
+      double bar = "personal".equals(candidate.source) ? level.historyMarginTaxMultiple
+        : Gates.noHistoryMultipleFor(candidate.buyPrice, gearHalfTax, level.noHistoryMarginTaxMultiple);
       if (requireMarginOverTax && !Gates.marginClearsTax(detail.netAtAverage, taxAtSupport, bar)) {
         Detail d = detail.copy();
         d.thinnerThanTax = true;

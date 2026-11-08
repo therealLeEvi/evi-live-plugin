@@ -74,6 +74,8 @@ final class EviLivePanel extends PluginPanel {
   private final JLabel alsoHeader = sectionHeader("Also worth buying");
   /** What the list currently shows, so a poll that changes nothing does not relayout the sidebar. */
   private String shownAlso = "";
+  // A click on an "Also worth buying" card: the item to draw as the main card instead (2 Nov 2026). No-op until wired.
+  private java.util.function.IntConsumer promote = id -> { };
   /** The advice about offers already placed, one small card each. */
   private final JPanel adviceList = new JPanel();
   /** "Import is on, but no file was found ...", under the connection line. Hidden unless the journal says so.
@@ -602,6 +604,9 @@ final class EviLivePanel extends PluginPanel {
   static final String HOLDING_LINE = "eviHoldingLine";
 
   /** What a holding line's two menu items call. Any thread. */
+  /** What a click on an "Also worth buying" card does: the plugin draws that item as the main card. */
+  void onPromote(java.util.function.IntConsumer onPromote) { promote = onPromote == null ? id -> { } : onPromote; }
+
   void onHoldingLine(Consumer<EviLivePlugin.AdviceCard> personalUse, Consumer<EviLivePlugin.AdviceCard> gone) {
     linePersonalUse = personalUse == null ? c -> { } : personalUse;
     lineGone = gone == null ? c -> { } : gone;
@@ -707,9 +712,13 @@ final class EviLivePanel extends PluginPanel {
    *
    *  An empty or absent list hides the section completely, so the default of one suggestion leaves the
    *  panel exactly as it was. EDT only. */
-  void alsoSuggested(java.util.List<Suggestion> extras) {
+  void alsoSuggested(java.util.List<Suggestion> extras) { alsoSuggested(extras, false); }
+
+  /** clickable: the main card is a buy, so a click on an extra can swap it in ("I'm taking this one"). Over a holding's
+   *  sell the cards stay plain: a buy never displaces a sell reminder. */
+  void alsoSuggested(java.util.List<Suggestion> extras, boolean clickable) {
     SwingUtilities.invokeLater(() -> {
-      StringBuilder sig = new StringBuilder();
+      StringBuilder sig = new StringBuilder(clickable ? "c;" : "p;");
       if (extras != null) for (Suggestion s : extras)
         if (s != null) sig.append(s.itemId).append('|').append(s.quantity).append('|')
           .append(s.buyPrice).append('|').append(s.expectedProfit).append(';');
@@ -733,6 +742,16 @@ final class EviLivePanel extends PluginPanel {
             BorderFactory.createMatteBorder(0, 3, 0, 0, p.muted),
             BorderFactory.createEmptyBorder(6, 8, 6, 8)));
           if (s.reasoning != null && !s.reasoning.isEmpty()) tip(card, s.reasoning);
+          if (clickable) {
+            final int itemId = s.itemId;
+            card.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            card.getAccessibleContext().setAccessibleDescription("Click to make this your main suggestion");
+            card.addMouseListener(new java.awt.event.MouseAdapter() {
+              @Override public void mouseClicked(java.awt.event.MouseEvent ev) {
+                if (SwingUtilities.isLeftMouseButton(ev)) promote.accept(itemId);
+              }
+            });
+          }
 
           JLabel name = new JLabel((++n) + ". " + (s.name == null ? "" : s.name));
           name.setFont(FontManager.getRunescapeSmallFont());
@@ -771,6 +790,13 @@ final class EviLivePanel extends PluginPanel {
               : "caution".equals(s.verdict.level) ? p.warn : p.good);
             v.setAlignmentX(Component.LEFT_ALIGNMENT);
             card.add(v);
+          }
+          if (clickable) {
+            JLabel use = new JLabel("Click to take this one instead");
+            use.setFont(FontManager.getRunescapeSmallFont());
+            use.setForeground(p.muted);
+            use.setAlignmentX(Component.LEFT_ALIGNMENT);
+            card.add(use);
           }
           alsoList.add(Box.createVerticalStrut(6));
           alsoList.add(card);
