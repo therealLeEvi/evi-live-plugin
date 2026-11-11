@@ -52,8 +52,10 @@ decide-reachable-headline-under-rung
 decide-reachable-history-at-rung
 decide-reachable-judged-at-request-minimum
 decide-reachable-market-source-only
+decide-reachable-steady-total
 decide-slot-reserve-uncollected-sell
 decide-source-market-skips-history
+decide-spread-walk-chosen-minimum
 decide-stepdown-cash-capped
 decide-stretch-dip-silent
 decide-stretch-warning

@@ -288,6 +288,7 @@ public final class ResponseJson {
       o.add("itemId", number(r.reachable.itemId));
       o.add("profit", number(r.reachable.profit));
       o.add("atMinimum", number(r.reachable.atMinimum));
+      if (r.reachable.steadyProfit != null) o.add("steadyProfit", number(r.reachable.steadyProfit.doubleValue())); // absent = the old bytes
       j.add("reachable", o);
     }
     if (r.fellThroughFromHistory == null) j.add("fellThroughFromHistory", JsonNull.INSTANCE);

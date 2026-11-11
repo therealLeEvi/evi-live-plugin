@@ -350,6 +350,19 @@ public final class MarketTier {
       return computeMarketSuggestion(mapping, latest, volumes, with(blocklist, spend, minProfit, spreadRank));
     }
 
+    /** This account's spread rank ({@link SpreadRank#spreadRankFor}), the offset every ranking above starts from. */
+    public double spreadRank() {
+      return spreadRank;
+    }
+
+    /**
+     * server.mjs {@code marketRankAt(bl, spend, mp, sr)} and the first pass's {@code rankFor(sr)} (11 Nov 2026): the same
+     * ranking at an EXPLICIT spread rank -- the account's own, or 0 when Engine's marketChain continues from the top.
+     */
+    public Pick rankAt(Set<Integer> blocklist, Double spend, double minProfit, double spread) {
+      return computeMarketSuggestion(mapping, latest, volumes, with(blocklist, spend, minProfit, spread));
+    }
+
     /** {@link #rank} as a pick chain's tier. */
     public PickChain.Rank ranked(double minProfit) {
       return bl -> rank(bl, minProfit);

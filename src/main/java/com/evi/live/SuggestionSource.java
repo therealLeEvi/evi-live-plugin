@@ -22,19 +22,25 @@ package com.evi.live;
  *   <li>{@code BEST_OF_BOTH} -- rank your history and the wider market together, and take whichever
  *       is genuinely worth more. Your history still counts; it just stops being a veto.</li>
  *   <li>{@code MARKET_ONLY} -- ignore your history entirely and pick from the whole market.</li>
+ *   <li>{@code HISTORY_ONLY} -- your own history and nothing else: no market-wide pick at all (10 Nov 2026; this replaced
+ *       the separate "Include market-wide suggestions" switch, which is now hidden -- see EviLiveConfig).</li>
  * </ul>
  *
  * Sent as {@code ?source=}; HISTORY_FIRST is left off the query string entirely, so an untouched
  * config produces exactly the request it produced before this setting existed.
  */
 public enum SuggestionSource {
-  HISTORY_FIRST, BEST_OF_BOTH, MARKET_ONLY;
+  HISTORY_FIRST, BEST_OF_BOTH, MARKET_ONLY, HISTORY_ONLY;
+
+  /** Whether this choice lets EVI look at the whole market (sent as includeMarket=1). Only Your history only does not. */
+  boolean includesMarket() { return this != HISTORY_ONLY; }
 
   /** RuneLite's config UI renders enum dropdowns using toString(), so this is the visible label. */
   @Override public String toString() {
     switch (this) {
       case BEST_OF_BOTH: return "Best of both";
       case MARKET_ONLY: return "Market only";
+      case HISTORY_ONLY: return "Your history only";
       default: return "Your history first";
     }
   }

@@ -40,6 +40,7 @@ import net.runelite.client.Notifier;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.callback.ClientThread;
@@ -341,6 +342,7 @@ public class EviLivePlugin extends Plugin {
   }
 
   @Override protected void startUp() throws Exception {
+    migrateMarketToggle();
     // The sanctioned accessor: Plugin#getPluginDirectory(), which resolves to
     // .runelite/plugin-data/<internalName>/ (internalName is set in @PluginDescriptor above and is
     // required by that method). An earlier version called Filepath.Unchecked.getLegacyPluginDirectory
@@ -827,6 +829,27 @@ public class EviLivePlugin extends Plugin {
   // Colour scheme changes take effect at once: the panel repaints itself rather than waiting for a
   // client restart, which for a purely cosmetic setting would read as the setting not working.
   // The risk level likewise: chosen in the settings panel, the sidebar's buttons follow at once.
+  /** Whether the chosen source lets EVI search the whole market: every choice but Your history only. */
+  boolean sourceIncludesMarket() {
+    SuggestionSource s=config==null?null:config.suggestionSource();
+    return s==null||s.includesMarket();
+  }
+  // 10 Nov 2026 (the maintainer): "Include market-wide suggestions" is folded into "Suggest from" and hidden. A player
+  // who had switched it OFF is moved to Your history only, ONCE -- whatever Suggest from said, because with the toggle off
+  // no choice searched the market -- and the hidden toggle is then put back to its default, so it can never steer
+  // anything again and this never runs twice. Settings are per RuneLite profile, so this runs at startUp and on every
+  // profile switch. Writes through the same path as the risk buttons (configWriter in tests, ConfigManager otherwise).
+  void migrateMarketToggle() {
+    if(config==null||config.includeMarketWide())return;
+    java.util.function.BiConsumer<String,String> write=configWriter;
+    if(write==null){
+      if(configManager==null)return;
+      write=(k,v)->configManager.setConfiguration(CONFIG_GROUP,k,v);
+    }
+    write.accept("suggestionSource",SuggestionSource.HISTORY_ONLY.name());
+    write.accept("includeMarketWide","true");
+  }
+  @Subscribe public void onProfileChanged(ProfileChanged e) { migrateMarketToggle(); }
   @Subscribe public void onConfigChanged(ConfigChanged e) {
     if(!CONFIG_GROUP.equals(e.getGroup()))return;
     if("panelTheme".equals(e.getKey())){if(panel!=null)panel.applyTheme(config.panelTheme());}
@@ -1029,8 +1052,8 @@ public class EviLivePlugin extends Plugin {
         ?(used.pricesStale?BUYS_PAUSED_STALE:BUYS_PAUSED)
         :r!=null&&r.slots!=null&&r.slots.buysHeldForExits
         ?sellReserveMessage(r.slots.sellSlotsOwed)
-        :noSuggestionMessage(config.includeMarketWide(),config.marginSafetyCushion(),freeSlots,collectableSlots,config.suggestionSource())
-          +reachableMessage(r==null?null:r.reachable);
+        :noSuggestionMessage(sourceIncludesMarket(),config.marginSafetyCushion(),freeSlots,collectableSlots,config.suggestionSource())
+          +reachableMessage(r==null?null:r.reachable,setAsideCount());
       updatePanelSuggestion(s,s==null?diagnosis:null);
       // The session list is what shapes everything above it; kept on screen so it is never the
       // invisible reason a suggestion looks poor.
@@ -1350,8 +1373,9 @@ public class EviLivePlugin extends Plugin {
     // Left off only for LOW, which is now the bridge's own default -- so Medium is sent explicitly,
     // and choosing it still means Medium rather than silently falling back to the new default.
     if(risk!=null && risk!=RiskLevel.LOW){if(q.length()>0)q.append('&');q.append("risk=").append(risk.param());}
-    // includeMarketWide, never the retired includeMarketSuggestions (see EviLiveConfig for why the key moved).
-    if(config.includeMarketWide()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
+    // From "Suggest from" only (10 Nov 2026): every choice but Your history only lets EVI search the market. The hidden
+    // includeMarketWide toggle is NOT read here (see migrateMarketToggle), nor the older includeMarketSuggestions.
+    if(sourceIncludesMarket()){if(q.length()>0)q.append('&');q.append("includeMarket=1");}
     // How much of the cash stack one market-wide suggestion may commit (see MaxTradeShare for the
     // backtest that produced the default). OFF is left off the query entirely, like every other
     // setting here, so it behaves exactly as before this existed.
@@ -1587,15 +1611,15 @@ public class EviLivePlugin extends Plugin {
     // both-tiers sentence is the one a new player now meets most.
     // Nothing was searched, so the margin check never ran either: no cushion clause here, the same
     // rule as the full-GE case above.
-    if(!includeMarket && source==SuggestionSource.MARKET_ONLY)
-      return "Market-wide suggestions are switched off and \"Suggest from\" is set to Market only, so EVI"
-        +" has nowhere to look for a trade. Turn on \"Include market-wide suggestions\" to get suggestions.";
+    // 10 Nov 2026: the market is off only through "Suggest from: Your history only" (the separate toggle is folded in), so
+    // the old "Market only with the toggle off" case can no longer happen from the plugin; a direct caller passing that
+    // contradiction still gets the history-only sentence, which names the one setting that would change it.
     String base;
     if(!includeMarket)
       // "passes your settings", not "worth flipping": the bar applied is the player's own (minimum
       // profit and the rest), so the sentence must not imply EVI judged the items unprofitable.
-      base="Nothing in your own trade history passes your settings right now, and market-wide suggestions"
-        +" are switched off. Turn on \"Include market-wide suggestions\" to search the whole Grand Exchange.";
+      base="Nothing in your own trade history passes your settings right now, and \"Suggest from\" is set to"
+        +" Your history only. Choose another option there to search the whole Grand Exchange.";
     else if(source==SuggestionSource.MARKET_ONLY)
       // Your history was not consulted, so do not mention it -- and name the lever that would.
       base="No market-wide pick passes your settings right now. \"Suggest from\" is set to Market only,"
@@ -1619,11 +1643,38 @@ public class EviLivePlugin extends Plugin {
     // understate the ceiling several-fold; the bridge now probes the same rungs this dropdown offers,
     // so the number it returns is reachable at a setting the player can actually select. An older
     // bridge sends no `atMinimum` and gets the original sentence, unchanged.
+    //
+    // 10 Nov 2026 (approved): a market pick's minimum is judged on the more cautious of its live and its steady total, so
+    // the headline alone could sit ABOVE the player's minimum ("Dragon javelin, at about 126,256 gp" under 100k, ~92k on
+    // its usual prices). When the engine sends that lower steady total, both are said; absent, the sentences are unchanged.
+    String worth=r.steadyProfit!=null&&r.steadyProfit>0&&r.steadyProfit<r.profit
+      ?String.format("%s, about %,d gp on its usual prices (%,d gp at today's)",item,r.steadyProfit,r.profit)
+      :String.format("%s, at about %,d gp",item,r.profit);
     if(r.atMinimum!=null&&r.atMinimum>1)
       return String.format(" Your minimum profit is what is filtering everything out: set it to %,d gp"
-        +" and the best this cash stack can do right now is %s, at about %,d gp.",r.atMinimum,item,r.profit);
+        +" and the best this cash stack can do right now is %s.",r.atMinimum,worth);
     return String.format(" Your minimum profit is what is filtering everything out: the best this cash stack"
-      +" can do right now is %s, at about %,d gp. Lower the minimum to see trades like it.",item,r.profit);
+      +" can do right now is %s. Lower the minimum to see trades like it.",worth);
+  }
+  // 11 Nov 2026 (the maintainer): with items SKIPPED (this session's Skips plus the four-hour SkipMemory), the sentence above
+  // was false -- 7 skipped, the market still held several 100k+ trades, and the card said "Your minimum profit is what is
+  // filtering everything out: the best ... is Emerald ring". The engine never sees a skipped item, so the reachable figure
+  // is the best of the REST. Say how many are left out and how to bring them back, and never claim the minimum is the only
+  // filter. No skips: exactly the old sentence.
+  static String reachableMessage(Reachable r, int setAside) {
+    if(setAside<=0)return reachableMessage(r);
+    String left=(setAside==1?" 1 item you skipped is":String.format(" %,d items you skipped are",setAside))
+      +" left out (\"Show skipped items again\" brings them back).";
+    if(r==null||r.profit==null||r.profit<=0)return left;
+    String item=r.name==null||r.name.isEmpty()?"the best trade EVI can see":r.name;
+    String worth=r.steadyProfit!=null&&r.steadyProfit>0&&r.steadyProfit<r.profit
+      ?String.format("%s, about %,d gp on its usual prices (%,d gp at today's)",item,r.steadyProfit,r.profit)
+      :String.format("%s, at about %,d gp",item,r.profit);
+    if(r.atMinimum!=null&&r.atMinimum>1)
+      return left+String.format(" Of the rest, the best this cash stack can do right now is %s: set your minimum to %,d gp"
+        +" to see it.",worth,r.atMinimum);
+    return left+String.format(" Of the rest, the best this cash stack can do right now is %s. Lower the minimum to see"
+      +" trades like it.",worth);
   }
   private void updatePanelSuggestion(Suggestion s, String diag) {
     if(s==null)suggestionCache.setExtras(null); // no main pick, no extras: a stale extra must never fill a quantity
@@ -1845,7 +1896,7 @@ public class EviLivePlugin extends Plugin {
   // market actually offers at this cash stack, so "nothing" can say why instead of looking broken.
   // It is a statement of what exists, not a recommendation -- it has been through none of EVI's
   // checks, and the wording below never tells anyone to buy it.
-  static final class Reachable {String name;Integer itemId;Long profit,atMinimum;}
+  static final class Reachable {String name;Integer itemId;Long profit,atMinimum,steadyProfit;}
   // Realised profit since the player last pressed Reset (or since EVI's first matched trade), computed by
   // the bridge from matched flips only -- see profitSince in bridge/server.mjs. unmatchedSales and
   // openPositions are what that total deliberately leaves out, shown beside it rather than folded in: a

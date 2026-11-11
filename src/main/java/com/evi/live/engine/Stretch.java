@@ -40,7 +40,7 @@ public final class Stretch {
 
   /** stretchLine: the card line. */
   static String line(Reading r) {
-    return r.abovePct + "% over its 2-week usual ~" + JsValues.localeUs(r.level);
+    return r.abovePct + "% above its usual price -- often falls back. Consider waiting.";
   }
 
   /** stretchSentence: a market-wide statement only, never a rate from anyone's own trades, never odds. */

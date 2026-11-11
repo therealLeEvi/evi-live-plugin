@@ -72,6 +72,8 @@ public final class EviLiveRiskSkipTest {
       public RiskLevel riskLevelV2(){return newRisk;}
       public boolean includeMarketSuggestions(){return oldMarket;}
       public boolean includeMarketWide(){return newMarket;}
+      // 10 Nov 2026: the market choice now lives in Suggest from; "new key off" is modelled as Your history only.
+      public SuggestionSource suggestionSource(){return newMarket?SuggestionSource.HISTORY_FIRST:SuggestionSource.HISTORY_ONLY;}
     };
   }
 
@@ -168,15 +170,16 @@ public final class EviLiveRiskSkipTest {
     check("includeMarket=1".equals(query(withConfig(config(RiskLevel.LOW,RiskLevel.LOW,false,true)))),
       "Old key false, new key true: market-wide must be asked for");
     check("".equals(query(withConfig(config(RiskLevel.LOW,RiskLevel.LOW,true,false)))),
-      "Old key true, new key false: market-wide must NOT be asked for");
+      "Old key true, Your history only: market-wide must NOT be asked for");
     // The no-suggestion message is driven from the same toggle. With the OLD key false and the NEW
     // key true under Market only, the market check ran -- so the sentence must not say it is off.
     check(("No market-wide pick passes your settings right now. \"Suggest from\" is set to Market only,"
         +" so your own trade history was not considered -- switch it to include that too.")
         .equals(diagnosis(marketOnly(false,true))),"The message must follow the NEW key (on): "+diagnosis(marketOnly(false,true)));
-    check(("Market-wide suggestions are switched off and \"Suggest from\" is set to Market only, so EVI"
-        +" has nowhere to look for a trade. Turn on \"Include market-wide suggestions\" to get suggestions.")
-        .equals(diagnosis(marketOnly(true,false))),"The message must follow the NEW key (off): "+diagnosis(marketOnly(true,false)));
+    // 10 Nov 2026: the hidden toggle no longer switches the market off -- Market only searches the market whatever it holds.
+    check(("No market-wide pick passes your settings right now. \"Suggest from\" is set to Market only,"
+        +" so your own trade history was not considered -- switch it to include that too.")
+        .equals(diagnosis(marketOnly(true,false))),"The hidden toggle must not change the message: "+diagnosis(marketOnly(true,false)));
 
     // --------------------------------------------------------------- 4. Layout B: the three buttons
     {
@@ -240,7 +243,7 @@ public final class EviLiveRiskSkipTest {
       EviLivePlugin plugin=new EviLivePlugin();
       set(plugin,"config",new EviLiveConfig(){
         public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
-        public boolean includeMarketWide(){return false;}
+        public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
         public RiskLevel riskLevelV2(){String v=stored.get("riskLevelV2");return v==null?RiskLevel.LOW:RiskLevel.valueOf(v);}
       });
       set(plugin,"configWriter",(java.util.function.BiConsumer<String,String>)stored::put);

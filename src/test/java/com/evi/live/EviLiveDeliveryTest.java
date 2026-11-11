@@ -71,7 +71,7 @@ public final class EviLiveDeliveryTest {
     // explicit marginSafetyCushion(){return false;} overrides in the tests below predate that and
     // are now redundant, but still pin those tests to "cushion off" whatever the default becomes.
     EviLivePlugin defaults=new EviLivePlugin();
-    set(defaults,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}});
+    set(defaults,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}});
     check("".equals(suggestionQuery.invoke(defaults)),"With the trade-size cap and market-wide suggestions turned off, an otherwise-untouched config must send an empty query");
     Method cushionItem=EviLiveConfig.class.getDeclaredMethod("marginSafetyCushion");
     check("requireMarginAboveNoise".equals(cushionItem.getAnnotation(net.runelite.client.config.ConfigItem.class).keyName()),"marginSafetyCushion must use its new keyName, so a 'true' RuneLite stored under the old on-by-default key is not picked up");
@@ -96,35 +96,35 @@ public final class EviLiveDeliveryTest {
     // "any profit, no floor" -- must behave exactly like the old default of 0 (left off the query
     // entirely), and each tier must send its own documented gp figure.
     EviLivePlugin autoTier=new EviLivePlugin();
-    set(autoTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(autoTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.AUTO;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(autoTier)),"AUTO (the default tier) must be left off the query entirely, same as the old free-form field's 0");
 
     EviLivePlugin t100k=new EviLivePlugin();
-    set(t100k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(t100k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T100K;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=100000".equals(suggestionQuery.invoke(t100k)),"T100K alone, with no leading '&', when it's the only tuned setting");
 
     EviLivePlugin t200k=new EviLivePlugin();
-    set(t200k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(t200k,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T200K;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=200000".equals(suggestionQuery.invoke(t200k)),"T200K's gp figure");
 
     EviLivePlugin t1m=new EviLivePlugin();
-    set(t1m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(t1m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T1M;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("minProfit=1000000".equals(suggestionQuery.invoke(t1m)),"T1M's gp figure");
 
     EviLivePlugin t2m=new EviLivePlugin();
-    set(t2m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(t2m,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T2M;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -134,27 +134,27 @@ public final class EviLiveDeliveryTest {
     // must leave the query exactly as before this setting existed, and turning it on must combine
     // with a profit tier in the documented order (minProfit=, then cushion=1, then everything else).
     EviLivePlugin cushionExplicitOff=new EviLivePlugin();
-    set(cushionExplicitOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(cushionExplicitOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(cushionExplicitOff)),"Explicit marginSafetyCushion=false must be left off the query, matching pre-existing behaviour");
 
     EviLivePlugin cushionWithTier=new EviLivePlugin();
-    set(cushionWithTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(cushionWithTier,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T500K;}
       public boolean marginSafetyCushion(){return true;}
     });
     check("minProfit=500000&cushion=1".equals(suggestionQuery.invoke(cushionWithTier)),"A profit tier plus an opted-in cushion must both appear, minProfit= before cushion=1");
 
     EviLivePlugin noDurationPreference=new EviLivePlugin();
-    set(noDurationPreference,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(noDurationPreference,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public TradePace tradePace(){return TradePace.NONE;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(noDurationPreference)),"Explicit NONE (no preference) must be left off the query, matching the default");
 
     EviLivePlugin durationOnly=new EviLivePlugin();
-    set(durationOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(durationOnly,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public TradePace tradePace(){return TradePace.MEDIUM;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -166,7 +166,7 @@ public final class EviLiveDeliveryTest {
     for(int i=0;i<paces.length;i++){
       final TradePace p=paces[i];
       EviLivePlugin longTrade=new EviLivePlugin();
-      set(longTrade,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}public TradePace tradePace(){return p;}});
+      set(longTrade,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}public TradePace tradePace(){return p;}});
       check(("duration="+paceMinutes[i]).equals(suggestionQuery.invoke(longTrade)),"Each trade pace must send its own minutes: "+p);
       check(p.minutes()>=120,"No pace may promise less than two hours, which never completed: "+p);
     }
@@ -174,24 +174,26 @@ public final class EviLiveDeliveryTest {
     for(SuggestionSource src:SuggestionSource.values()){
       final SuggestionSource v=src;
       EviLivePlugin p=new EviLivePlugin();
-      set(p,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+      set(p,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
         public SuggestionSource suggestionSource(){return v;}
         public boolean marginSafetyCushion(){return false;}
       });
       String q=(String)suggestionQuery.invoke(p);
-      if(v==SuggestionSource.HISTORY_FIRST)check("".equals(q),"The default source must add nothing to the query: "+q);
-      else check(("source="+v.param()).equals(q),"Each source must send its own value: "+v+" -> "+q);
+      // 10 Nov 2026: the market flag comes from Suggest from alone; Your history only is the one choice without it.
+      if(v==SuggestionSource.HISTORY_FIRST)check("includeMarket=1".equals(q),"The default source sends only the market flag: "+q);
+      else if(v==SuggestionSource.HISTORY_ONLY)check("".equals(q),"Your history only must send neither the market flag nor a source: "+q);
+      else check(("includeMarket=1&source="+v.param()).equals(q),"Each source must send its own value: "+v+" -> "+q);
     }
     // The old setting is hidden and must no longer reach the query, whatever it still holds.
     EviLivePlugin staleDuration=new EviLivePlugin();
-    set(staleDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(staleDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public TradeDuration tradeDuration(){return TradeDuration.FIVE;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(staleDuration)),"A value left in the retired duration setting must have no effect at all");
     // AUTO leaves the floor to the bridge (which applies a small one); NONE asks for none at all.
     EviLivePlugin noFloor=new EviLivePlugin();
-    set(noFloor,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(noFloor,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public MinProfitTier minProfitThreshold(){return MinProfitTier.NONE;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -203,7 +205,7 @@ public final class EviLiveDeliveryTest {
     EviLivePlugin storedStarter=new EviLivePlugin();
     set(storedStarter,"config",new EviLiveConfig(){
       public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
-      public boolean includeMarketWide(){return false;}
+      public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public TradingProfile tradingProfile(){return TradingProfile.STARTER;}
     });
     check("".equals(suggestionQuery.invoke(storedStarter)),"A stored Starter profile must send nothing at all -- no profile=starter: "+suggestionQuery.invoke(storedStarter));
@@ -224,9 +226,34 @@ public final class EviLiveDeliveryTest {
     Method marketGetter=EviLiveConfig.class.getDeclaredMethod("includeMarketWide");
     net.runelite.client.config.ConfigItem marketItem=marketGetter.getAnnotation(net.runelite.client.config.ConfigItem.class);
     check("includeMarketWide".equals(marketItem.keyName()),"The live market-wide setting must be on the NEW keyName includeMarketWide: "+marketItem.keyName());
-    check(!marketItem.hidden(),"The live market-wide setting must be visible");
-    check("Include market-wide suggestions".equals(marketItem.name()),"The visible name must not change, so the no-suggestion messages that quote it stay true: "+marketItem.name());
-    check(marketGetter.getReturnType()==boolean.class,"includeMarketWide must be a boolean");
+    // 10 Nov 2026: folded into Suggest from (Your history only) and HIDDEN; kept under its keyName and type for the migration.
+    check(marketItem.hidden(),"The old market-wide toggle must be hidden: Suggest from: Your history only replaced it");
+    check(marketGetter.getReturnType()==boolean.class,"includeMarketWide must stay a boolean, so a stored value still loads");
+    // A hidden toggle must never steer anything: stored false with every Suggest from choice, the query follows Suggest from.
+    for(SuggestionSource src:SuggestionSource.values()){
+      final SuggestionSource v=src;
+      EviLivePlugin p=new EviLivePlugin();
+      set(p,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
+        public boolean includeMarketWide(){return false;}
+        public SuggestionSource suggestionSource(){return v;}});
+      String q=(String)suggestionQuery.invoke(p);
+      check(v.includesMarket()==q.contains("includeMarket=1"),"The hidden toggle must not change the query: "+v+" -> "+q);
+    }
+    // The one-time move: a stored false goes to Your history only and the toggle back to true; a stored true writes nothing.
+    for(boolean storedOn:new boolean[]{false,true}){
+      final boolean on=storedOn;
+      java.util.Map<String,String> written=new java.util.LinkedHashMap<>();
+      EviLivePlugin p=new EviLivePlugin();
+      set(p,"config",new EviLiveConfig(){public boolean includeMarketWide(){return on;}
+        public SuggestionSource suggestionSource(){return SuggestionSource.MARKET_ONLY;}});
+      set(p,"configWriter",(java.util.function.BiConsumer<String,String>)written::put);
+      Method migrate=EviLivePlugin.class.getDeclaredMethod("migrateMarketToggle");
+      migrate.setAccessible(true);
+      migrate.invoke(p);
+      if(on)check(written.isEmpty(),"A toggle that was on must write nothing: "+written);
+      else check("HISTORY_ONLY".equals(written.get("suggestionSource")) && "true".equals(written.get("includeMarketWide")) && written.size()==2,
+        "A toggle that was off must move to Your history only, once, and reset the toggle: "+written);
+    }
     Method oldMarketGetter=EviLiveConfig.class.getDeclaredMethod("includeMarketSuggestions");
     net.runelite.client.config.ConfigItem oldMarketItem=oldMarketGetter.getAnnotation(net.runelite.client.config.ConfigItem.class);
     check("includeMarketSuggestions".equals(oldMarketItem.keyName()),"The retired market-wide item must keep its keyName, so a stored value still loads");
@@ -239,14 +266,14 @@ public final class EviLiveDeliveryTest {
     set(shareDefault,"config",new EviLiveConfig(){});
     check("includeMarket=1&stackShare=25".equals(suggestionQuery.invoke(shareDefault)),"An untouched config must ask for market-wide suggestions, send no profile, and cap one trade at 25% of the cash stack: "+suggestionQuery.invoke(shareDefault));
     EviLivePlugin shareOff=new EviLivePlugin();
-    set(shareOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}});
+    set(shareOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}});
     check("".equals(suggestionQuery.invoke(shareOff)),"No limit must be left off the query entirely");
     for(MaxTradeShare s:new MaxTradeShare[]{MaxTradeShare.TENTH,MaxTradeShare.THIRD,MaxTradeShare.HALF}){
       final MaxTradeShare chosen=s;
       EviLivePlugin p=new EviLivePlugin();
       set(p,"config",new EviLiveConfig(){
         public MaxTradeShare maxTradeShare(){return chosen;}
-        public boolean includeMarketWide(){return false;}
+        public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       });
       check(("stackShare="+chosen.percent()).equals(suggestionQuery.invoke(p)),"Each share option must send its own percentage: "+chosen);
     }
@@ -259,7 +286,7 @@ public final class EviLiveDeliveryTest {
       set(p,"config",new EviLiveConfig(){
         public SuggestionFocus suggestionFocus(){return pick;}
         public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
-        public boolean includeMarketWide(){return false;}
+        public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       });
       String expect=pick==SuggestionFocus.ALL_ITEMS?"":"focus="+pick.param();
       check(expect.equals(suggestionQuery.invoke(p)),"Each focus must send its own value (All items nothing): "+pick+" -> "+suggestionQuery.invoke(p));
@@ -272,7 +299,7 @@ public final class EviLiveDeliveryTest {
     // members=: which kind of world the player is on, so the bridge never suggests a members-only
     // item on a free-to-play world. Unknown (not yet logged in) must send nothing at all.
     EviLivePlugin worldPlugin=new EviLivePlugin();
-    set(worldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}});
+    set(worldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}});
     check("".equals(suggestionQuery.invoke(worldPlugin)),"An unknown world type must not send members= at all");
     set(worldPlugin,"membersWorld",Boolean.TRUE);
     check("members=1".equals(suggestionQuery.invoke(worldPlugin)),"A members world must send members=1");
@@ -291,7 +318,7 @@ public final class EviLiveDeliveryTest {
     check(!profitableSell.sellsAtLoss(),"A profitable sell with a known break-even is not a loss");
 
     EviLivePlugin mediumRisk=new EviLivePlugin();
-    set(mediumRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(mediumRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public RiskLevel riskLevelV2(){return RiskLevel.MEDIUM;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -301,7 +328,7 @@ public final class EviLiveDeliveryTest {
     set(mediumRisk,"riskLevelsShown",true);
     check("risk=medium".equals(suggestionQuery.invoke(mediumRisk)),"With the risk levels shown, Medium must be sent explicitly now that Low is the default");
     EviLivePlugin lowRisk=new EviLivePlugin();
-    set(lowRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(lowRisk,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check(EviLiveConfig.class.getMethod("riskLevelV2").invoke(new EviLiveConfig(){})==RiskLevel.LOW,"Low is the default risk level");
@@ -316,7 +343,7 @@ public final class EviLiveDeliveryTest {
 
     EviLivePlugin marketOff=new EviLivePlugin();
     set(marketOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}
-      public boolean includeMarketWide(){return false;}
+      public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(marketOff)),"Explicit includeMarketWide=false must be left off the query entirely");
@@ -325,7 +352,7 @@ public final class EviLiveDeliveryTest {
     // if the policy alone is non-default -- there's nothing to have a policy about without a horizon. ~6 hours always sends its
     // policy too, even the default (warn), so the query stays self-explanatory either way.
     EviLivePlugin forecastOff=new EviLivePlugin();
-    set(forecastOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(forecastOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public ForecastHorizon exitRiskCheck(){return ForecastHorizon.OFF;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
       public boolean marginSafetyCushion(){return false;}
@@ -334,14 +361,14 @@ public final class EviLiveDeliveryTest {
     check(new EviLiveConfig(){}.exitRiskCheck()==ForecastHorizon.OFF,"The Exit-risk check defaults to Off");
 
     EviLivePlugin forecastSixHour=new EviLivePlugin();
-    set(forecastSixHour,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(forecastSixHour,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public ForecastHorizon exitRiskCheck(){return ForecastHorizon.SIX_HOUR;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("forecast=6h&onForecast=warn".equals(suggestionQuery.invoke(forecastSixHour)),"An enabled check must always send its policy too, even when the policy itself is left at its default (warn)");
 
     EviLivePlugin forecastWithDuration=new EviLivePlugin();
-    set(forecastWithDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(forecastWithDuration,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public TradePace tradePace(){return TradePace.FAST;}
       public ForecastHorizon exitRiskCheck(){return ForecastHorizon.SIX_HOUR;}
       public ForecastPolicy forecastPolicy(){return ForecastPolicy.SKIP;}
@@ -366,21 +393,21 @@ public final class EviLiveDeliveryTest {
     Map<Integer,Integer> snapshot=new java.util.HashMap<>();
     snapshot.put(11232,15);snapshot.put(995,50000000);snapshot.put(4151,1);
     EviLivePlugin inventoryOff=new EviLivePlugin();
-    set(inventoryOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(inventoryOff,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(inventoryOff,"inventoryQuantities",snapshot);
     check("".equals(suggestionQuery.invoke(inventoryOff)),"suggestIdleInventory defaults to off, so a populated inventory snapshot must still be left off the query");
 
     EviLivePlugin inventoryOnEmpty=new EviLivePlugin();
-    set(inventoryOnEmpty,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(inventoryOnEmpty,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(inventoryOnEmpty)),"suggestIdleInventory=true with an empty inventory snapshot (the default) must still produce an empty query");
 
     EviLivePlugin inventoryOn=new EviLivePlugin();
-    set(inventoryOn,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(inventoryOn,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -395,7 +422,7 @@ public final class EviLiveDeliveryTest {
     java.lang.reflect.InvocationHandler inRaid=(pr,m,ar)->m.getName().equals("getTopLevelWorldView")
       ?java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.WorldView.class.getClassLoader(),new Class[]{net.runelite.api.WorldView.class},worldView):null;
     EviLivePlugin inventoryInRaid=new EviLivePlugin();
-    set(inventoryInRaid,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(inventoryInRaid,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -420,7 +447,7 @@ public final class EviLiveDeliveryTest {
       ?java.lang.reflect.Proxy.newProxyInstance(net.runelite.api.WorldView.class.getClassLoader(),new Class[]{net.runelite.api.WorldView.class},
         (p2,m2,a2)->m2.getName().equals("isInstance")?Boolean.FALSE:null):null;
     EviLivePlugin inventoryOverworld=new EviLivePlugin();
-    set(inventoryOverworld,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(inventoryOverworld,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean suggestIdleInventory(){return true;}
       public boolean marginSafetyCushion(){return false;}
     });
@@ -470,7 +497,7 @@ public final class EviLiveDeliveryTest {
     // default), and included once known so the bridge can scope its cross-restart open-position
     // fallback (pickPersistentOpenPosition, bridge/suggestions.mjs) to this account specifically.
     EviLivePlugin accountPlugin=new EviLivePlugin();
-    set(accountPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(accountPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(accountPlugin)),"No account known yet (null, the default) must be left off the query entirely");
@@ -484,7 +511,7 @@ public final class EviLiveDeliveryTest {
     // run), and included as a plain integer once known, so a real reading of 0 gp (dead broke)
     // still reaches the bridge rather than being treated the same as "unknown".
     EviLivePlugin cashPlugin=new EviLivePlugin();
-    set(cashPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(cashPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(cashPlugin)),"Unknown cash stack (-1, the default) must be left off the query entirely");
@@ -500,7 +527,7 @@ public final class EviLiveDeliveryTest {
     // is open (-1, the default), and included as openItemId once known, so the bridge can return a
     // plain live-market price for it regardless of flip history or ranking.
     EviLivePlugin openItemPlugin=new EviLivePlugin();
-    set(openItemPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(openItemPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(openItemPlugin)),"No GE slot open (-1, the default) must be left off the query entirely");
@@ -515,7 +542,7 @@ public final class EviLiveDeliveryTest {
     Method updateHeld=EviLivePlugin.class.getDeclaredMethod("updateHeldForResale",EviLivePlugin.Offer.class,EviLivePlugin.Offer.class);
     updateHeld.setAccessible(true);
     EviLivePlugin holdPlugin=new EviLivePlugin();
-    set(holdPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(holdPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     check("".equals(suggestionQuery.invoke(holdPlugin)),"Nothing held yet: the query must be unaffected");
@@ -584,7 +611,7 @@ public final class EviLiveDeliveryTest {
     // setting, so an untouched config with nothing active or skipped still sends an empty query.
     Method refresh=EviLivePlugin.class.getDeclaredMethod("refreshActiveSlotItemIds");refresh.setAccessible(true);
     EviLivePlugin excludePlugin=new EviLivePlugin();
-    set(excludePlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(excludePlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     EviLivePlugin.Offer[] exSlots=(EviLivePlugin.Offer[])get(excludePlugin,"slots");
@@ -631,26 +658,25 @@ public final class EviLiveDeliveryTest {
     // noSuggestionMessage: asserted as WHOLE STRINGS, for every (source, includeMarket) pair. A
     // contains() on one phrase is what let the 6 Oct order bug through: Market only with the toggle
     // OFF said "No market-wide pick passes your settings" about a market check that never ran.
-    final String NOTHING_SEARCHED="Market-wide suggestions are switched off and \"Suggest from\" is set to Market only, so EVI"
-      +" has nowhere to look for a trade. Turn on \"Include market-wide suggestions\" to get suggestions.";
-    final String HISTORY_ONLY="Nothing in your own trade history passes your settings right now, and market-wide suggestions"
-      +" are switched off. Turn on \"Include market-wide suggestions\" to search the whole Grand Exchange.";
+    // 10 Nov 2026: the market is off only through Suggest from: Your history only, so one off-sentence for every source.
+    final String HISTORY_ONLY="Nothing in your own trade history passes your settings right now, and \"Suggest from\" is set to"
+      +" Your history only. Choose another option there to search the whole Grand Exchange.";
     final String MARKET_ONLY_NONE="No market-wide pick passes your settings right now. \"Suggest from\" is set to Market only,"
       +" so your own trade history was not considered -- switch it to include that too.";
     final String BOTH_NONE="Nothing passes your settings right now -- neither your own trade history nor a market-wide pick.";
     final String CUSHION=" \"Require margin above price noise\" is on, and it currently skips most candidates -- turn it off to see them.";
     final String GE_FULL="Every Grand Exchange slot is in use, so there is nowhere to place another offer."
       +" EVI will suggest again as soon as one frees up.";
-    SuggestionSource[] sources={null,SuggestionSource.HISTORY_FIRST,SuggestionSource.BEST_OF_BOTH,SuggestionSource.MARKET_ONLY};
-    String[] whenOff={HISTORY_ONLY,HISTORY_ONLY,HISTORY_ONLY,NOTHING_SEARCHED};
-    String[] whenOn={BOTH_NONE,BOTH_NONE,BOTH_NONE,MARKET_ONLY_NONE};
+    SuggestionSource[] sources={null,SuggestionSource.HISTORY_FIRST,SuggestionSource.BEST_OF_BOTH,SuggestionSource.MARKET_ONLY,SuggestionSource.HISTORY_ONLY};
+    String[] whenOff={HISTORY_ONLY,HISTORY_ONLY,HISTORY_ONLY,HISTORY_ONLY,HISTORY_ONLY};
+    String[] whenOn={BOTH_NONE,BOTH_NONE,BOTH_NONE,MARKET_ONLY_NONE,BOTH_NONE};
     for(int i=0;i<sources.length;i++) {
       String off=EviLivePlugin.noSuggestionMessage(false,false,1,0,sources[i]);
       String on=EviLivePlugin.noSuggestionMessage(true,false,1,0,sources[i]);
       check(whenOff[i].equals(off),"Market-wide OFF, source "+sources[i]+": wrong message: "+off);
       check(whenOn[i].equals(on),"Market-wide ON, source "+sources[i]+": wrong message: "+on);
       // The margin check is named only when something was actually searched.
-      check((i==3?whenOff[i]:whenOff[i]+CUSHION).equals(EviLivePlugin.noSuggestionMessage(false,true,1,0,sources[i])),
+      check((whenOff[i]+CUSHION).equals(EviLivePlugin.noSuggestionMessage(false,true,1,0,sources[i])),
         "Market-wide OFF with the margin check on, source "+sources[i]+": "+EviLivePlugin.noSuggestionMessage(false,true,1,0,sources[i]));
       check((whenOn[i]+CUSHION).equals(EviLivePlugin.noSuggestionMessage(true,true,1,0,sources[i])),
         "Market-wide ON with the margin check on, source "+sources[i]+": "+EviLivePlugin.noSuggestionMessage(true,true,1,0,sources[i]));
@@ -678,12 +704,15 @@ public final class EviLiveDeliveryTest {
     // wrong value on ONE argument at the call site changes the sentence: the source (null or any
     // other), the toggle (hard-coded either way), the margin check, and the slot counts.
     String wired;
-    wired=diagnosisFromPoll(false,true,SuggestionSource.MARKET_ONLY,1,0);
-    check(NOTHING_SEARCHED.equals(wired),"Poll path, Market only + market-wide off: the sidebar must say nothing was searched, got: "+wired);
+    // 10 Nov 2026: the first argument is now the HIDDEN toggle, which must change nothing; Suggest from carries the market.
+    wired=diagnosisFromPoll(false,false,SuggestionSource.MARKET_ONLY,1,0);
+    check(MARKET_ONLY_NONE.equals(wired),"Poll path, Market only + the hidden toggle off: the market WAS searched, got: "+wired);
     wired=diagnosisFromPoll(true,false,SuggestionSource.MARKET_ONLY,1,0);
-    check(MARKET_ONLY_NONE.equals(wired),"Poll path, Market only + market-wide on: got: "+wired);
+    check(MARKET_ONLY_NONE.equals(wired),"Poll path, Market only: got: "+wired);
     wired=diagnosisFromPoll(false,false,SuggestionSource.BEST_OF_BOTH,1,0);
-    check(HISTORY_ONLY.equals(wired),"Poll path, market-wide off must reach the message as off, got: "+wired);
+    check(BOTH_NONE.equals(wired),"Poll path, Best of both + the hidden toggle off: both were searched, got: "+wired);
+    wired=diagnosisFromPoll(true,false,SuggestionSource.HISTORY_ONLY,1,0);
+    check(HISTORY_ONLY.equals(wired),"Poll path, Your history only must reach the message as market off, got: "+wired);
     wired=diagnosisFromPoll(true,true,SuggestionSource.HISTORY_FIRST,1,0);
     check((BOTH_NONE+CUSHION).equals(wired),"Poll path, the margin check must reach the message, got: "+wired);
     wired=diagnosisFromPoll(true,false,SuggestionSource.HISTORY_FIRST,0,0);
@@ -757,6 +786,31 @@ public final class EviLiveDeliveryTest {
     // minProfit=1 is MinProfitTier.NONE, which is "no minimum at all" rather than a number to set.
     EviLivePlugin.Reachable none=new EviLivePlugin.Reachable();none.name="Anything";none.profit=900L;none.atMinimum=1L;
     check(EviLivePlugin.reachableMessage(none).contains("Lower the minimum"),"The NONE rung is not a figure to tell anyone to type in");
+    // 10 Nov 2026: a market pick held back by its STEADY total names that total too, so the line never shows only a figure
+    // above the player's own minimum. Exact sentence pinned: the value, not a re-derived condition.
+    EviLivePlugin.Reachable steady=new EviLivePlugin.Reachable();steady.name="Dragon javelin";steady.profit=126256L;steady.atMinimum=1L;steady.steadyProfit=92190L;
+    String withSteady=EviLivePlugin.reachableMessage(steady);
+    check(withSteady.equals(" Your minimum profit is what is filtering everything out: the best this cash stack can do right now is Dragon javelin,"
+      +" about 92,190 gp on its usual prices (126,256 gp at today's). Lower the minimum to see trades like it."),"The steady figure is named beside the headline: "+withSteady);
+    steady.atMinimum=100000L;
+    check(EviLivePlugin.reachableMessage(steady).contains("set it to 100,000 gp")&&EviLivePlugin.reachableMessage(steady).contains("about 92,190 gp on its usual prices"),"...on a named rung too");
+    EviLivePlugin.Reachable notLower=new EviLivePlugin.Reachable();notLower.name="Anything";notLower.profit=900L;notLower.atMinimum=1L;notLower.steadyProfit=900L;
+    check(EviLivePlugin.reachableMessage(notLower).equals(EviLivePlugin.reachableMessage(none)),"A steady figure that is not lower changes nothing");
+    // 11 Nov 2026: skipped items are invisible to the engine, so with any set aside the minimum must not be blamed alone.
+    // Exact sentences pinned (the values, not a re-derived condition); no skips = byte-identical to the old sentence.
+    EviLivePlugin.Reachable ring=new EviLivePlugin.Reachable();ring.name="Emerald ring";ring.profit=78000L;ring.atMinimum=1L;
+    check(EviLivePlugin.reachableMessage(ring,0).equals(EviLivePlugin.reachableMessage(ring)),"No skips: the old sentence, unchanged");
+    String sk=EviLivePlugin.reachableMessage(ring,7);
+    check(sk.equals(" 7 items you skipped are left out (\"Show skipped items again\" brings them back). Of the rest, the best this"
+      +" cash stack can do right now is Emerald ring, at about 78,000 gp. Lower the minimum to see trades like it."),"Skips are named first: "+sk);
+    check(!sk.contains("what is filtering everything out"),"With skips the minimum is never called the only filter: "+sk);
+    ring.atMinimum=50000L;
+    check(EviLivePlugin.reachableMessage(ring,1).equals(" 1 item you skipped is left out (\"Show skipped items again\" brings them back)."
+      +" Of the rest, the best this cash stack can do right now is Emerald ring, at about 78,000 gp: set your minimum to 50,000 gp to see it."),
+      "One skip, with a rung: "+EviLivePlugin.reachableMessage(ring,1));
+    check(EviLivePlugin.reachableMessage(null,3).equals(" 3 items you skipped are left out (\"Show skipped items again\" brings them back)."),
+      "Skips with no reachable figure still say so");
+    check(EviLivePlugin.reachableMessage(null,0).isEmpty(),"No skips and no figure: nothing, as before");
     // The sell-side reserve: a buy held back so the exits already owed still have somewhere to go.
     check(EviLivePlugin.sellReserveMessage(3).contains("3 items you're holding with no sell placed yet"),"The reserve message must say how many exits are owed");
     check(EviLivePlugin.sellReserveMessage(1).contains("1 item you're holding"),"and read correctly for a single one");
@@ -775,7 +829,7 @@ public final class EviLiveDeliveryTest {
     // two long-gone positions (adamant darts, adamant keel parts) reserved the last two slots,
     // because the journal only sees the Grand Exchange and never learns stock left another way.
     EviLivePlugin heldPlugin=new EviLivePlugin();
-    set(heldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(heldPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     // The bridge believes 810 (darts), 32032 (keel parts) and 4151 are held; only 4151 really is.
@@ -802,7 +856,7 @@ public final class EviLiveDeliveryTest {
     // freeSlots=/collectable=: counted from the 8 real slots and sent only once every one of them
     // has actually been observed this session.
     EviLivePlugin slotPlugin=new EviLivePlugin();
-    set(slotPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(slotPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     EviLivePlugin.Offer[] capacitySlots=(EviLivePlugin.Offer[])get(slotPlugin,"slots");
@@ -1072,7 +1126,7 @@ public final class EviLiveDeliveryTest {
     Method poll=EviLivePlugin.class.getDeclaredMethod("pollSuggestion",long.class);poll.setAccessible(true);
     EviLivePlugin pollPlugin=new EviLivePlugin();
     set(pollPlugin,"gson",new Gson());
-    set(pollPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;} // suggestionQuery() (called at the top of every real pollSuggestion()) needs this
+    set(pollPlugin,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;} // suggestionQuery() (called at the top of every real pollSuggestion()) needs this
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin,"running",true);set(pollPlugin,"lifecycle",1L);
@@ -1109,7 +1163,7 @@ public final class EviLiveDeliveryTest {
     // normally, exactly as an unpersisted (live-observed) suggestion always has been.
     EviLivePlugin pollPlugin2=new EviLivePlugin();
     set(pollPlugin2,"gson",new Gson());
-    set(pollPlugin2,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(pollPlugin2,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin2,"running",true);set(pollPlugin2,"lifecycle",1L);
@@ -1132,7 +1186,7 @@ public final class EviLiveDeliveryTest {
     // remaining count). Must come through corrected, not as the bridge originally sent it.
     EviLivePlugin pollPlugin3=new EviLivePlugin();
     set(pollPlugin3,"gson",new Gson());
-    set(pollPlugin3,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public boolean includeMarketWide(){return false;}
+    set(pollPlugin3,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
       public boolean marginSafetyCushion(){return false;}
     });
     set(pollPlugin3,"running",true);set(pollPlugin3,"lifecycle",1L);

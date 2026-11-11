@@ -373,12 +373,22 @@ public final class Engine {
     public final int itemId;
     public final double profit;
     public final double atMinimum;
+    /**
+     * 10 Nov 2026: the STEADY total a market pick's floor was judged on (MarketTier: min(net, netRank) x quantity), only when
+     * it is LOWER than {@link #profit}; null otherwise (and then absent from the response -- the old bytes).
+     */
+    public final Double steadyProfit;
 
     Reachable(String name, int itemId, double profit, double atMinimum) {
+      this(name, itemId, profit, atMinimum, null);
+    }
+
+    Reachable(String name, int itemId, double profit, double atMinimum, Double steadyProfit) {
       this.name = name;
       this.itemId = itemId;
       this.profit = profit;
       this.atMinimum = atMinimum;
+      this.steadyProfit = steadyProfit;
     }
   }
 
@@ -634,8 +644,8 @@ public final class Engine {
       if (suggestion == null && !geFull && !buysHeldForExits && includeMarket) {
         MarketTier.Ranking ranking = ranking();
         // Its OWN copy of the blocklist: the chain adds to the set it is handed.
-        Pick marketPick = PickChain.pick(chain(ranking.ranked(minProfit), support(minProfit), new LinkedHashSet<>(blocklist), this::holdBack,
-          demotedPicks::add));
+        Pick marketPick = marketChain(sr -> bl -> ranking.rankAt(bl, maxSpend, minProfit, sr), support(minProfit), new LinkedHashSet<>(blocklist),
+          this::holdBack, demotedPicks::add);
         suggestion = marketPick;
         // Say so when the floor, not an empty history, is why the player's own history was passed over.
         if (suggestion != null && !minProfitChosen) {
@@ -684,8 +694,8 @@ public final class Engine {
         }
         if (stepped == null && includeMarket) {
           try {
-            stepped = PickChain.pick(chain(bl -> ranking().rankAt(bl, maxSpend, Policy.AUTO_MIN_PROFIT), support(Policy.AUTO_MIN_PROFIT), blocklist,
-              this::holdBack, demotedPicks::add));
+            stepped = marketChain(sr -> bl -> ranking().rankAt(bl, maxSpend, Policy.AUTO_MIN_PROFIT, sr), support(Policy.AUTO_MIN_PROFIT), blocklist,
+              this::holdBack, demotedPicks::add);
           } catch (Exception e) {
             stepped = null;
           }
@@ -719,7 +729,7 @@ public final class Engine {
           // Sized like the main pick (fix (3)): the same typical-hour sizing, capture cap and window share.
           if (history) next = PickChain.pick(chain(historyRank(extrasMinimum, spend), support(extrasMinimum), blocklist, null, null));
           if (next == null && includeMarket)
-            next = PickChain.pick(chain(bl -> ranking().rankAt(bl, spend, extrasMinimum), support(extrasMinimum), blocklist, null, null));
+            next = marketChain(sr -> bl -> ranking().rankAt(bl, spend, extrasMinimum, sr), support(extrasMinimum), blocklist, null, null);
           if (next == null) break;
           out.additional.add(next);
           if (budget != null) budget = Math.max(0, budget - (double) next.buyPrice * next.quantity);
@@ -948,6 +958,29 @@ public final class Engine {
      * again -- the held-back items are already on the shared blocklist, so each pass ranks the next candidates -- until a
      * pass returns a pick or holds nothing back. A chosen minimum runs it once.
      */
+    /**
+     * server.mjs {@code marketChain} (11 Nov 2026, the spread's walk down): computeMarketSuggestion takes candidates[k] of
+     * what is LEFT, so a chain whose picks were held back walked DOWN the ranking from the account's offset and, after its
+     * three attempts, returned nothing while the candidates above c[k] passed every check. A market chain that HELD
+     * something back and returned nothing now runs again FROM THE TOP (spread rank 0), and again while a pass holds
+     * something back; the held-back items are already on {@code bl}, so each pass ranks the next candidates through every
+     * check at the same minimum. A first pass that returns a pick, or holds nothing back, is exactly the old behaviour.
+     */
+    Pick marketChain(java.util.function.DoubleFunction<PickChain.Rank> rankFor, PickChain.SupportHook support, Set<Integer> bl,
+                     Consumer<List<PickChain.Blocked>> outer, Consumer<Pick> onDemoted) {
+      int[] held = {0};
+      Consumer<List<PickChain.Blocked>> onBlocked = rows -> {
+        held[0] += rows.size();
+        if (outer != null) outer.accept(rows);
+      };
+      Pick pick = PickChain.pick(chain(rankFor.apply(ranking().spreadRank()), support, bl, onBlocked, onDemoted));
+      while (pick == null && held[0] > 0) {
+        held[0] = 0;
+        pick = PickChain.pick(chain(rankFor.apply(0), support, bl, onBlocked, onDemoted));
+      }
+      return pick;
+    }
+
     Pick historyChainUnderAuto(Function<Consumer<List<PickChain.Blocked>>, PickChain.Options> chain) {
       int[] held = {0};
       Consumer<List<PickChain.Blocked>> onBlocked = rows -> {
@@ -1065,6 +1098,21 @@ public final class Engine {
      * on next, and a candidate demoted at one rung must still be judged at a lower one. The figure must clear the rung it
      * is advertised at, at the price buyers are paying. A statement of what exists, never a suggestion.
      */
+    /**
+     * server.mjs {@code steadyProfitOf}: the steady total a MARKET pick's floor was judged on -- MarketTier's netRank x
+     * quantity, each side falling back to the live quote exactly as there; null for any other tier, or with no steady
+     * reading (then the floor read the live total only).
+     */
+    Double steadyProfitOf(Pick c) {
+      if (!"market".equals(c.source)) return null;
+      MarketAggregates.RobustPrice r = market.rankPrices == null ? null : market.rankPrices.get(c.itemId);
+      if (r == null || !(r.high > 0 || r.low > 0)) return null;
+      long high = r.high > 0 ? r.high : c.sellPrice;
+      long low = r.low > 0 ? r.low : c.buyPrice;
+      long n = high - low - Tax.estimateUnitTax(c.itemId, high);
+      return (double) n * c.quantity;
+    }
+
     Reachable reachableProbe(boolean history) {
       for (double rung : REACHABLE_RUNGS) {
         if (!(rung < minProfit)) continue;
@@ -1079,7 +1127,7 @@ public final class Engine {
         }
         if (includeMarket) {
           try {
-            Pick m = PickChain.pick(chain(bl -> ranking().rankAt(bl, maxSpend, rung), support(rung), new LinkedHashSet<>(blocklist), rows -> { }, p -> { }));
+            Pick m = marketChain(sr -> bl -> ranking().rankAt(bl, maxSpend, rung, sr), support(rung), new LinkedHashSet<>(blocklist), rows -> { }, p -> { });
             if (m != null) candidates.add(m);
           } catch (Exception e) {
             // the bridge's catch: no market candidate on this rung
@@ -1089,8 +1137,11 @@ public final class Engine {
         for (Pick c : candidates) {
           Worth w = worthOf(c);
           Double profit = Policy.headlineProfitOf(JsValues.jsRound(w.quoted), w.supported == null ? Double.NaN : w.supported);
-          if (profit != null && JsValues.isFinite(profit) && profit > 0 && profit >= rung && (best == null || profit > best.profit))
-            best = new Reachable(c.name, c.itemId, profit, rung);
+          if (profit != null && JsValues.isFinite(profit) && profit > 0 && profit >= rung && (best == null || profit > best.profit)) {
+            // 10 Nov 2026: server.mjs steadyProfitOf -- the steady total travels beside the headline when it is lower.
+            Double steady = steadyProfitOf(c);
+            best = new Reachable(c.name, c.itemId, profit, rung, steady != null && steady < profit ? steady : null);
+          }
         }
         if (best != null) return best;
       }

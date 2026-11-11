@@ -24,7 +24,7 @@ Cheap items that trade in huge volumes clear all three easily. Each unit earns o
 the quantity. Expensive gear often has a much bigger margin per item but trades too rarely to pass the second check,
 and that check is there because an item you cannot sell is how GP gets stuck.
 
-If you would rather not trade bulk, set *Suggestion focus* to *Gear*, or raise *Min predicted profit*. A longer *Trade
+If you would rather not trade bulk, set *Suggestion focus* to *Gear*, or raise *Minimum profit per trade*. A longer *Trade
 pace* changes the picks too, because EVI then sizes a trade over a longer window.
 
 ## All my Grand Exchange slots are full and EVI suggests nothing to buy.

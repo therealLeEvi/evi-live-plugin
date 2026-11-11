@@ -119,7 +119,7 @@ public final class StretchIntentTest {
 
   static void theWordsAreTheBridgesOwn() {
     Stretch.Reading r = new Stretch.Reading(1101581, 56);
-    check(Stretch.line(r).equals("56% over its 2-week usual ~1,101,581"), Stretch.line(r));
+    check(Stretch.line(r).equals("56% above its usual price -- often falls back. Consider waiting."), Stretch.line(r));
     check(Stretch.sentence(r).equals("This price is 56% above where the item usually traded over the last two weeks (about 1,101,581 gp). "
       + "Across the market, buys made this far above an item's usual price have lost money more often than buys near it."), Stretch.sentence(r));
   }
@@ -138,12 +138,12 @@ public final class StretchIntentTest {
     p.fillHistoryHours = 336;
     Verdict.Result v = Verdict.suggestionVerdict(p);
     check(Verdict.CAUTION.equals(v.level) && "Price well above usual".equals(v.label), v.level + " / " + v.label);
-    check(Boolean.FALSE.equals(v.checks.get(0).ok) && v.checks.get(0).text.equals("55% over its 2-week usual ~10,000"), v.checks.get(0).text);
+    check(Boolean.FALSE.equals(v.checks.get(0).ok) && v.checks.get(0).text.equals("55% above its usual price -- often falls back. Consider waiting."), v.checks.get(0).text);
     check(v.checks.size() == 2, "the stretch line and the fill line: " + v.checks.size());
     Pick sell = new Pick(1333, "Rune scimitar", "sell", 10, 15500, 17000, "holding");
     sell.stretch = new Stretch.Reading(10000, 55);
     Verdict.Result vs = Verdict.suggestionVerdict(sell);
-    check(vs == null || vs.checks.stream().noneMatch(l -> l.text.contains("2-week usual")), "never on a sell");
+    check(vs == null || vs.checks.stream().noneMatch(l -> l.text.contains("above its usual price")), "never on a sell");
   }
 
   static void applyTouchesABuyOnly() {

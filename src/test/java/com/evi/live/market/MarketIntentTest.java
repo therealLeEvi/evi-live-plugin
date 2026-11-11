@@ -1195,8 +1195,13 @@ public final class MarketIntentTest {
     check(text.equals(EviLiveConfig.PRICE_DATA_DISCLOSURE), "the disclosure text changed: " + EviLiveConfig.PRICE_DATA_DISCLOSURE);
     for (char ch : EviLiveConfig.PRICE_DATA_DISCLOSURE.toCharArray()) check(ch >= 0x20 && ch < 0x7f, "the disclosure must be plain ASCII: " + (int) ch);
     check(EviLiveConfig.PRICE_DATA_DISCLOSURE.length() <= 120, "the tooltip must stay short: " + EviLiveConfig.PRICE_DATA_DISCLOSURE.length() + " characters");
-    ConfigSection sec = EviLiveConfig.class.getField("priceDataSection").getAnnotation(ConfigSection.class);
-    check(sec != null && "Price data".equals(sec.name()) && text.equals(sec.description()), "a 'Price data' settings section carrying the disclosure");
+    // 10 Nov 2026 (the maintainer): no longer an EMPTY "Price data" section (it looked broken when clicked); the disclosure
+    // ends the description of the FIRST section, "What to trade", which every player sees.
+    ConfigSection sec = EviLiveConfig.class.getField("tradeSection").getAnnotation(ConfigSection.class);
+    check(sec != null && "What to trade".equals(sec.name()) && sec.description().endsWith(text), "the first settings section carrying the disclosure");
+    boolean noEmptySection = true;
+    try { EviLiveConfig.class.getField("priceDataSection"); noEmptySection = false; } catch (NoSuchFieldException expected) { }
+    check(noEmptySection, "the empty 'Price data' section must stay gone");
 
     // The README's figures (its "Price data" section), each against the constant behind it.
     PriceDataService.Settings d = PriceDataService.Settings.DEFAULT;

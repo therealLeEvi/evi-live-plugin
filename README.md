@@ -63,14 +63,13 @@ All of these are in RuneLite's settings under EVI Live. The defaults are a sensi
 
 | setting | default | what it does |
 | --- | --- | --- |
-| Min predicted profit | Auto | Skips suggestions predicted to make less than this. Auto scales with your cash. *No minimum (high risk)* also shows trades whose profit after tax is smaller than the tax itself, which a small price move can turn into a loss. |
+| Minimum profit per trade | Auto | Skips suggestions predicted to make less than this. Auto scales with your cash. *No minimum (high risk)* also shows trades whose profit after tax is smaller than the tax itself, which a small price move can turn into a loss. |
 | Trade pace | No preference | How long you will wait for one trade. Longer paces allow bigger, slower trades. |
 | Max share of cash per trade | 25% of cash | The most of your cash one market-wide suggestion may use. |
 | Suggestion focus | All items | Gear, bulk consumables and ammo, or everything. Sales are unaffected. |
 | Suggestions at once | 1 | For a large cash stack: more than one suggestion, each using only the cash the earlier ones left. |
 | Position sizing | Careful | *Bigger positions* buys more of thinly traded items. |
-| Suggest from | Your history first | Your own history first, the best of both, or the whole market. |
-| Include market-wide suggestions | On | Suggests from the whole Grand Exchange, not only items you have traded before. |
+| Suggest from | Your history first | Your own history first (then the market), the best of both, the market only, or your history only (no market-wide suggestions). |
 | Suggest selling idle inventory | Off | Also suggests selling valuable items in your inventory that EVI never saw you buy. |
 | Show GE hints / Fill suggestion hotkey | On / F8 | The price in the offer box, and the key that fills it in. |
 | Notify on offer warnings | Off | Uses RuneLite's notifier the first time EVI warns about one of your offers. |

@@ -37,27 +37,35 @@ import net.runelite.client.config.ModifierlessKeybind;
 @ConfigGroup("evilive")
 public interface EviLiveConfig extends Config {
 
+  // ------------------------------------------------------------------ The network disclosure
+  //
+  // 7 Oct 2026, the self-contained move: the plugin fetches the OSRS Wiki's public prices itself
+  // (com.evi.live.market.WikiPriceClient, the plugin's only network class to the internet). Every network use is
+  // disclosed plainly before it ships. The settings text is deliberately SHORT (the maintainer's decision, 7 Oct: the
+  // first version ran to about 760 characters, which a hover tooltip cannot carry); the full account -- what is fetched,
+  // when, how much, how long the first run takes, and what is never sent -- is in the plugin's README.
+  // MarketIntentTest pins this text word for word and still ties the README's figures to the constants that make them
+  // true. ASCII only, plain text. 10 Nov 2026 (the maintainer): it used to be the description of an EMPTY "Price data"
+  // section, which looked broken when clicked; it now ends the first section's description instead.
+  String PRICE_DATA_DISCLOSURE = "Downloads public GE prices from the OSRS Wiki. Nothing about you is sent. Details in the README.";
+
+  // 10 Nov 2026, the maintainer: simpler settings for players who have never traded. Four groups: What to trade (the four
+  // choices that matter), Advanced (closed), Display (closed), Trade history (closed). The old "Where suggestions come
+  // from" and "Safety checks" groups are folded in; moving an item between sections changes nothing that is stored.
   @ConfigSection(
     name = "What to trade",
-    description = "The size, pace and caution of the trades EVI will offer you.",
+    description = "How much, how fast, and from where. " + PRICE_DATA_DISCLOSURE,
     position = 10
   )
   String tradeSection = "tradeSection";
 
   @ConfigSection(
-    name = "Where suggestions come from",
-    description = "Whether EVI ranks from your own history, the whole market, or both.",
-    position = 20
-  )
-  String sourceSection = "sourceSection";
-
-  @ConfigSection(
-    name = "Safety checks",
-    description = "Extra warnings. Off by default; each one is opt-in for a measured reason.",
+    name = "Advanced",
+    description = "For experienced traders. The defaults are what EVI was measured with.",
     position = 30,
     closedByDefault = true
   )
-  String checksSection = "checksSection";
+  String advancedSection = "advancedSection";
 
   @ConfigSection(
     name = "Display and controls",
@@ -91,7 +99,7 @@ public interface EviLiveConfig extends Config {
 
   @ConfigItem(
     keyName = "minProfitTier",
-    name = "Min predicted profit",
+    name = "Minimum profit per trade",
     description = "Skips smaller trades. Auto scales with your cash. High risk adds thin trades a small dip can turn into a loss.",
     section = tradeSection,
     position = 11
@@ -131,7 +139,7 @@ public interface EviLiveConfig extends Config {
     name = "Max share of cash per trade",
     description = "The most of your cash a single market-wide suggestion may use.",
     section = tradeSection,
-    position = 14
+    position = 13
   )
   default MaxTradeShare maxTradeShare() {
     return MaxTradeShare.QUARTER;
@@ -148,8 +156,8 @@ public interface EviLiveConfig extends Config {
     keyName = "suggestionFocus",
     name = "Suggestion focus",
     description = "Which items EVI suggests buying: gear, bulk consumables and ammo, or all. Sales are unaffected.",
-    section = tradeSection,
-    position = 15
+    section = advancedSection,
+    position = 32
   )
   default SuggestionFocus suggestionFocus() {
     return SuggestionFocus.ALL_ITEMS;
@@ -163,8 +171,8 @@ public interface EviLiveConfig extends Config {
     keyName = "maxPositions",
     name = "Suggestions at once",
     description = "For a large cash stack. Each extra pick uses only the cash the earlier ones left.",
-    section = tradeSection,
-    position = 16
+    section = advancedSection,
+    position = 33
   )
   default MaxPositions maxPositions() {
     return MaxPositions.ONE;
@@ -176,8 +184,8 @@ public interface EviLiveConfig extends Config {
     keyName = "positionSizing",
     name = "Position sizing",
     description = "Bigger buys more of thinly traded items. More profit per trade, slightly more risk.",
-    section = tradeSection,
-    position = 17
+    section = advancedSection,
+    position = 31
   )
   default PositionSizing positionSizing() {
     return PositionSizing.CAREFUL;
@@ -200,9 +208,9 @@ public interface EviLiveConfig extends Config {
   @ConfigItem(
     keyName = "suggestionSource",
     name = "Suggest from",
-    description = "Your own history first, the best of both, or the whole market ignoring your history.",
-    section = sourceSection,
-    position = 21
+    description = "Your history first (then the market), the best of both, the market only, or your history only.",
+    section = tradeSection,
+    position = 14
   )
   default SuggestionSource suggestionSource() {
     return SuggestionSource.HISTORY_FIRST;
@@ -215,12 +223,17 @@ public interface EviLiveConfig extends Config {
   // held a stored "false" under the old key -- and flipping that default reached new installs only.
   // A new key reaches everyone. The cost, accepted by the maintainer: a player who had DELIBERATELY switched
   // it off finds it on once, and switches it off again here.
+  // HIDDEN 10 Nov 2026 (the maintainer): folded into "Suggest from", whose fourth choice "Your history only" is the
+  // off position. NOTHING reads it for suggestions any more (the query asks SuggestionSource.includesMarket()); it is kept
+  // under its keyName and type only so EviLivePlugin.migrateMarketToggle can move a stored "false" to Your history only
+  // ONCE and then put this back to true -- a hidden setting must never keep steering suggestions.
   @ConfigItem(
     keyName = "includeMarketWide",
     name = "Include market-wide suggestions",
-    description = "Suggests from the whole GE catalogue, not only items you have traded before.",
-    section = sourceSection,
-    position = 22
+    description = "Replaced by Suggest from: Your history only. Kept so a stored value can be moved over; no effect.",
+    section = advancedSection,
+    position = 48,
+    hidden = true
   )
   default boolean includeMarketWide() {
     return true;
@@ -232,8 +245,8 @@ public interface EviLiveConfig extends Config {
     keyName = "includeMarketSuggestions",
     name = "Include market-wide suggestions (old)",
     description = "Replaced by the setting of the same name. Kept so a stored value still loads; no effect.",
-    section = sourceSection,
-    position = 28,
+    section = advancedSection,
+    position = 49,
     hidden = true
   )
   default boolean includeMarketSuggestions() {
@@ -249,8 +262,8 @@ public interface EviLiveConfig extends Config {
     keyName = "tradingProfile",
     name = "Trading profile",
     description = "Removed. Kept so nothing you chose is lost; it no longer has any effect.",
-    section = sourceSection,
-    position = 23,
+    section = advancedSection,
+    position = 50,
     hidden = true
   )
   default TradingProfile tradingProfile() {
@@ -261,8 +274,8 @@ public interface EviLiveConfig extends Config {
     keyName = "suggestIdleInventory",
     name = "Suggest selling idle inventory",
     description = "Also suggests selling valuable inventory items EVI never saw you buy.",
-    section = sourceSection,
-    position = 24
+    section = advancedSection,
+    position = 34
   )
   default boolean suggestIdleInventory() {
     return false;
@@ -272,8 +285,8 @@ public interface EviLiveConfig extends Config {
     keyName = "itemBlocklist",
     name = "Item blocklist (item IDs)",
     description = "Item IDs never to suggest, e.g. 4151,995. Easier: the sidebar's Block icon.",
-    section = sourceSection,
-    position = 25
+    section = advancedSection,
+    position = 35
   )
   default String itemBlocklist() {
     return "";
@@ -293,8 +306,8 @@ public interface EviLiveConfig extends Config {
     keyName = "exitRiskCheck",
     name = "Exit-risk check",
     description = "Warns when items with a similar recent price pattern often failed to sell within about 6 hours.",
-    section = checksSection,
-    position = 31
+    section = advancedSection,
+    position = 36
   )
   default ForecastHorizon exitRiskCheck() {
     return ForecastHorizon.OFF;
@@ -313,8 +326,8 @@ public interface EviLiveConfig extends Config {
     keyName = "requireMarginAboveNoise",
     name = "Require margin above price noise",
     description = "Experimental and far too strict: skips almost every trade. Best left off.",
-    section = checksSection,
-    position = 32
+    section = advancedSection,
+    position = 37
   )
   default boolean marginSafetyCushion() {
     return false;
@@ -331,8 +344,8 @@ public interface EviLiveConfig extends Config {
     keyName = "notifyAdvice",
     name = "Notify on offer warnings",
     description = "Uses RuneLite's notifier the first time EVI warns about an offer you placed.",
-    section = checksSection,
-    position = 33
+    section = advancedSection,
+    position = 38
   )
   default boolean notifyAdvice() {
     return false;
@@ -348,8 +361,8 @@ public interface EviLiveConfig extends Config {
     keyName = "forecastPolicy",
     name = "On an unfavorable forecast",
     description = "Inactive: the exit-risk check only warns and never skips a trade.",
-    section = checksSection,
-    position = 33,
+    section = advancedSection,
+    position = 51,
     hidden = true
   )
   default ForecastPolicy forecastPolicy() {
@@ -392,27 +405,6 @@ public interface EviLiveConfig extends Config {
   default PanelTheme panelTheme() {
     return PanelTheme.RUNELITE;
   }
-
-  // ------------------------------------------------------------------ Price data
-  //
-  // 7 Oct 2026, the self-contained move: the plugin fetches the OSRS Wiki's public prices itself
-  // (com.evi.live.market.WikiPriceClient, the plugin's only network class to the internet). Every network use is
-  // disclosed plainly before it ships. The settings text is deliberately SHORT (the maintainer's decision, 7 Oct: the
-  // first version ran to about 760 characters, which a hover tooltip cannot carry); the full account -- what is fetched,
-  // when, how much, how long the first run takes, and what is never sent -- is in the plugin's README.
-  // MarketIntentTest pins this text word for word and still ties the README's figures to the constants that make them
-  // true. It holds no setting: the disclosure is the section's own description (RuneLite shows it on the section
-  // header). ASCII only, plain text.
-  String PRICE_DATA_DISCLOSURE = "Downloads public GE prices from the OSRS Wiki. Nothing about you is sent. Details in the README.";
-
-  @ConfigSection(
-    name = "Price data",
-    description = PRICE_DATA_DISCLOSURE,
-    position = 45,
-    closedByDefault = true
-  )
-  String priceDataSection = "priceDataSection";
-
 
   // ------------------------------------------------------------------ Trade history
   //
