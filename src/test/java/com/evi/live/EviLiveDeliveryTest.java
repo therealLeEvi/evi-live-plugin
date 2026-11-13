@@ -144,7 +144,7 @@ public final class EviLiveDeliveryTest {
       public MinProfitTier minProfitThreshold(){return MinProfitTier.T500K;}
       public boolean marginSafetyCushion(){return true;}
     });
-    check("minProfit=500000&cushion=1".equals(suggestionQuery.invoke(cushionWithTier)),"A profit tier plus an opted-in cushion must both appear, minProfit= before cushion=1");
+    check("minProfit=500000".equals(suggestionQuery.invoke(cushionWithTier)),"A stored margin-above-noise switch is never sent: the built-in engine has no such check (12 Nov 2026)");
 
     EviLivePlugin noDurationPreference=new EviLivePlugin();
     set(noDurationPreference,"config",new EviLiveConfig(){public MaxTradeShare maxTradeShare(){return MaxTradeShare.OFF;}public SuggestionSource suggestionSource(){return SuggestionSource.HISTORY_ONLY;}
@@ -714,7 +714,7 @@ public final class EviLiveDeliveryTest {
     wired=diagnosisFromPoll(true,false,SuggestionSource.HISTORY_ONLY,1,0);
     check(HISTORY_ONLY.equals(wired),"Poll path, Your history only must reach the message as market off, got: "+wired);
     wired=diagnosisFromPoll(true,true,SuggestionSource.HISTORY_FIRST,1,0);
-    check((BOTH_NONE+CUSHION).equals(wired),"Poll path, the margin check must reach the message, got: "+wired);
+    check(BOTH_NONE.equals(wired),"Poll path, a stored margin-above-noise switch must NOT be blamed for an empty answer (the built-in engine never applies it), got: "+wired);
     wired=diagnosisFromPoll(true,false,SuggestionSource.HISTORY_FIRST,0,0);
     check(GE_FULL.equals(wired),"Poll path, the slot counts must reach the message, got: "+wired);
     wired=diagnosisFromPoll(true,false,SuggestionSource.HISTORY_FIRST,0,2);
@@ -1147,6 +1147,58 @@ public final class EviLiveDeliveryTest {
     // while the plugin dropped it. A transient condition must not cause a permanent exclusion.
     check(!pollPluginSkips.contains(5),"...and must NOT enter the manual-skip list, which lasts the whole session");
     check(get(pollPlugin,"suggestionCache")==null,"The rejected phantom suggestion must never reach suggestionCache (left uninitialized/untouched in this harness)");
+
+    // 12 Nov 2026: a suggestion nobody vouches for any more must not stay fillable. The hint, the hotkey and the search
+    // row all fill from these two caches; a failed poll used to change the sidebar's text and leave them holding the old
+    // price and quantity, and reset() (logout, hop, character switch) never cleared them at all.
+    EviLivePlugin stalePlugin=new EviLivePlugin();
+    SuggestionCache staleCache=new SuggestionCache();OpenItemPriceCache staleOpen=new OpenItemPriceCache();
+    Runnable seedStale=()->{
+      staleCache.set(EviLiveSuggestionTest.suggestion(4151,"buy",3,1000,1200));
+      staleCache.setExtras(java.util.List.of(EviLiveSuggestionTest.suggestion(4153,"buy",2,500,600)));
+      staleOpen.set(EviLiveSuggestionTest.suggestion(4151,"buy",0,1000,1200));
+    };
+    set(stalePlugin,"gson",new Gson());
+    set(stalePlugin,"config",get(pollPlugin,"config"));
+    set(stalePlugin,"running",true);set(stalePlugin,"lifecycle",1L);
+    set(stalePlugin,"suggestionCache",staleCache);set(stalePlugin,"openItemPriceCache",staleOpen);
+    final boolean[] staleThrows={false};
+    set(stalePlugin,"answers",(AnswerSource)query->{if(staleThrows[0])throw new IllegalStateException("boom");return null;});
+    seedStale.run();
+    poll.invoke(stalePlugin,1L);
+    check(staleCache.get()==null && staleCache.extras().isEmpty() && staleOpen.get()==null,"A poll that got no answer must leave nothing for the hotkey to fill: not the pick, not an extra, not the open item's price");
+    seedStale.run();staleThrows[0]=true;
+    poll.invoke(stalePlugin,1L);
+    check(staleCache.get()==null && staleCache.extras().isEmpty() && staleOpen.get()==null,"A poll that threw must leave nothing for the hotkey to fill");
+    seedStale.run();
+    Method staleReset=EviLivePlugin.class.getDeclaredMethod("reset");staleReset.setAccessible(true);
+    staleReset.invoke(stalePlugin);
+    check(staleCache.get()==null && staleCache.extras().isEmpty() && staleOpen.get()==null,"reset() (logout, world hop, character switch) must forget the suggestion: it belonged to the account that just left");
+    // An answer worked out for one account must not be applied once another (or none) is logged in.
+    final EviLivePlugin switchPlugin=new EviLivePlugin();
+    SuggestionCache switchCache=new SuggestionCache();
+    set(switchPlugin,"gson",new Gson());
+    set(switchPlugin,"config",get(pollPlugin,"config"));
+    set(switchPlugin,"running",true);set(switchPlugin,"lifecycle",1L);
+    set(switchPlugin,"suggestionCache",switchCache);set(switchPlugin,"openItemPriceCache",new OpenItemPriceCache());
+    set(switchPlugin,"account","account-a");
+    set(switchPlugin,"answers",(AnswerSource)query->{
+      try{set(switchPlugin,"account","account-b");}catch(Exception e){throw new IllegalStateException(e);} // the character changes while the answer is on its way
+      return "{\"suggestion\":{\"itemId\":4151,\"name\":\"Abyssal whip\",\"action\":\"buy\",\"quantity\":1,\"buyPrice\":1000,\"sellPrice\":1200,\"source\":\"market\",\"reasoning\":\"for account a\"}}";
+    });
+    poll.invoke(switchPlugin,1L);
+    check(switchCache.get()==null,"An answer to a query that named another account must be dropped, never cached for whoever is logged in now");
+    // Control: with the account unchanged the same answer IS cached, so the check above is not passing for another reason.
+    final EviLivePlugin samePlugin=new EviLivePlugin();
+    SuggestionCache sameCache=new SuggestionCache();
+    set(samePlugin,"gson",new Gson());
+    set(samePlugin,"config",get(pollPlugin,"config"));
+    set(samePlugin,"running",true);set(samePlugin,"lifecycle",1L);
+    set(samePlugin,"suggestionCache",sameCache);set(samePlugin,"openItemPriceCache",new OpenItemPriceCache());
+    set(samePlugin,"account","account-a");
+    set(samePlugin,"answers",(AnswerSource)query->"{\"suggestion\":{\"itemId\":4151,\"name\":\"Abyssal whip\",\"action\":\"buy\",\"quantity\":1,\"buyPrice\":1000,\"sellPrice\":1200,\"source\":\"market\",\"reasoning\":\"for account a\"}}");
+    poll.invoke(samePlugin,1L);
+    check(sameCache.get()!=null && sameCache.get().itemId==4151,"Control: an answer for the account still logged in is cached");
 
     // The exclusion lasts exactly until the inventory changes -- collecting the filled buy IS that
     // event. Without this the new set would just be a slower version of the blacklist it replaced.

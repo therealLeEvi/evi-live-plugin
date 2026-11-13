@@ -112,7 +112,7 @@ public final class InProcessEngine implements Answerer {
     int have = Math.min(Math.max(0, m.hoursStored), BASIS_HOURS);
     if (!m.catchingUp && m.hoursStored < BASIS_HOURS && m.hoursUnavailable > 0)
       return "Price history: " + have + " of " + BASIS_HOURS + " hours. The OSRS Wiki did not send the rest this time; EVI asks again"
-        + " when RuneLite next starts. Buy suggestions start once it is complete.";
+        + " in about half an hour. Buy suggestions start once it is complete.";
     return "Loading price history: " + have + " of " + BASIS_HOURS + " hours. Buy suggestions start when it's done.";
   }
 

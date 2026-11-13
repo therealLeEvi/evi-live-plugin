@@ -32,7 +32,7 @@ public final class MarketSnapshot {
   public final int hoursStored;
   /**
    * Hours of the window the Wiki would not give this session ({@value PriceDataService#HOUR_TRIES} failures in a row):
-   * given up until the next session. Absent, but NOT still being fetched -- see {@link #catchingUp}.
+   * set aside for 30 minutes (PriceDataService.SKIP_RETRY_MS), then asked for again. Absent, but NOT still being fetched -- see {@link #catchingUp}.
    */
   public final int hoursUnavailable;
   public final int windowHours;

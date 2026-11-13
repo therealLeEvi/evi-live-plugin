@@ -327,7 +327,11 @@ public interface EviLiveConfig extends Config {
     name = "Require margin above price noise",
     description = "Experimental and far too strict: skips almost every trade. Best left off.",
     section = advancedSection,
-    position = 37
+    position = 37,
+    // 12 Nov 2026: hidden. The built-in engine never received this check (Engine.Hooks.cushion is not supplied), so the
+    // switch did nothing while the no-suggestion text could still blame it. The key stays so a stored value is not
+    // orphaned; see cushionOn() in EviLivePlugin.
+    hidden = true
   )
   default boolean marginSafetyCushion() {
     return false;

@@ -307,9 +307,12 @@ public final class EviLiveInProcessWiringTest {
       edt();
       String note = ((javax.swing.JTextArea) get(run.panel, "backfillNote")).getText();
       check(("Loading price history: 140 of " + InProcessEngine.BASIS_HOURS + " hours. Buy suggestions start when it's done.").equals(note)
-        && ((JComponent) get(run.panel, "backfillNote")).isVisible(), "the price-history line in the sidebar: " + note);
+        && !((JComponent) get(run.panel, "backfillNote")).isVisible(), "the price-history line is kept, and NOT drawn at the bottom while the card carries the progress: " + note);
       String seen = visibleText(run.panel);
-      check(seen.contains(EviLivePlugin.BUYS_PAUSED), "with no sell to show, the card says buys are paused (never \"nothing passes your settings\"):\n" + seen);
+      check(seen.contains(EviLivePlugin.STATE_LOADING + "\n140 of " + InProcessEngine.BASIS_HOURS + " hours\n")
+        && seen.contains("Buy suggestions start when it's done." + EviLivePlugin.STILL_WATCHED),
+        "with no sell to show, the card is the loading state with its count (never \"nothing passes your settings\"):\n" + seen);
+      check(seen.split("140 of", -1).length == 2, "the count is on screen once, not in the card and again at the bottom:\n" + seen);
       check(!seen.contains("passes your settings"), "the no-suggestion sentence must not claim the buy tiers were searched");
     } finally {
       engine.shutdown();

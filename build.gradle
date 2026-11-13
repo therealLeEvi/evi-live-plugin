@@ -298,6 +298,12 @@ tasks.register('inProcessButtonsTest', JavaExec) {
     mainClass = 'com.evi.live.inprocess.InProcessButtonsTest'
     maxHeapSize = '1g'
 }
+// activityLogTest: the LOCAL activity log file (12 Nov 2026) -- the writer and the events the plugin turns into records.
+tasks.register('activityLogTest', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.evi.live.EviLiveActivityLogTest'
+    systemProperty 'java.awt.headless', 'true'
+}
 tasks.register('inProcessStoresTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.EviLiveInProcessStoresTest'
@@ -337,6 +343,6 @@ tasks.register('patienceIntentTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.evi.live.engine.PatienceIntentTest'
 }
-tasks.named('check') { dependsOn 'observationTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest', 'riskSkipTest', 'journalIntentTest', 'journalVectorsTest', 'parityTest', 'pluginJournalTest', 'journalWiringTest', 'hubRulesTest', 'sidebarLinesTest', 'marketParityTest', 'marketIntentTest', 'marketMemoryTest', 'engineVectorsTest', 'engineIntentTest', 'tierVectorsTest', 'tierIntentTest', 'engineTranscriptTest', 'engineDecideIntentTest', 'adviceVectorsTest', 'adviceIntentTest', 'adviceTranscriptTest', 'marketTierVectorsTest', 'marketTierIntentTest', 'forecastVectorsTest', 'inProcessEngineTest', 'inProcessWiringTest', 'inProcessButtonsTest', 'inProcessStoresTest', 'releaseListingTest', 'tradeLogExportTest', 'shareInviteTest', 'stretchIntentTest', 'patienceIntentTest' }
+tasks.named('check') { dependsOn 'observationTest', 'panelTest', 'economyTest', 'deliveryTest', 'suggestionTest', 'hintTest', 'searchHighlightTest', 'itemSelectTest', 'gamevalTest', 'riskSkipTest', 'journalIntentTest', 'journalVectorsTest', 'parityTest', 'pluginJournalTest', 'journalWiringTest', 'hubRulesTest', 'sidebarLinesTest', 'marketParityTest', 'marketIntentTest', 'marketMemoryTest', 'engineVectorsTest', 'engineIntentTest', 'tierVectorsTest', 'tierIntentTest', 'engineTranscriptTest', 'engineDecideIntentTest', 'adviceVectorsTest', 'adviceIntentTest', 'adviceTranscriptTest', 'marketTierVectorsTest', 'marketTierIntentTest', 'forecastVectorsTest', 'inProcessEngineTest', 'inProcessWiringTest', 'inProcessButtonsTest', 'inProcessStoresTest', 'releaseListingTest', 'tradeLogExportTest', 'shareInviteTest', 'stretchIntentTest', 'patienceIntentTest', 'activityLogTest' }
 // Test tasks log to the console only, never into the real ~/.runelite/logs/client.log (src/test/logback-tests.xml); `run` keeps RuneLite's.
 tasks.withType(JavaExec).matching { it.name != 'run' }.configureEach { systemProperty 'logback.configurationFile', file('src/test/logback-tests.xml').absolutePath }

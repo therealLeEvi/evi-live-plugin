@@ -27,6 +27,8 @@ public final class StretchIntentTest {
     theWordsAreTheBridgesOwn();
     theVerdictLineComesFirstAndTheLabelOnlyFillsAnEmptyOne();
     applyTouchesABuyOnly();
+    // the plugin's OWN build (streamed from its per-hour archive files) gives what the list port gives
+    checks += com.evi.live.market.StretchBuildCheck.run();
     System.out.println("PASS: stretch intent, " + checks + " checks");
   }
 

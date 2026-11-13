@@ -99,6 +99,13 @@ the next EVI update. The README's "Sharing your trade log" section lists exactly
 No. *Save my trade log...* only saves a file on your computer, in `.runelite/plugin-data/evi-flipping/share/`. It stays
 there unless you upload it yourself.
 
+## What is the `activity` folder?
+
+A detailed record EVI keeps on your computer, one file per account per month: each suggestion it showed and the prices
+it was looking at, what you did with it, each change to your Grand Exchange offers, your cash stack at the time, and when
+you were logged in. It is there so suggestions can be measured against what actually happened. EVI never sends it
+anywhere and never reads it to decide a suggestion. You can delete the folder whenever you like.
+
 ## Where is my data, and how do I move it to another computer?
 
 Everything is in `.runelite/plugin-data/evi-flipping/` in your RuneLite folder. Copy the whole folder, including

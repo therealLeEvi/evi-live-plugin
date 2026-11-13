@@ -19,11 +19,11 @@ import java.util.regex.Pattern;
  * A plugin building packets in-process converts to the tree with the injected Gson and goes through the
  * same single validation path.
  *
- * <p>THE INT32 CAP IS KEPT AS THE JS ENGINE HAS IT, and it is an open decision rather than an
- * endorsement: price, total, filled and spent are refused above 2,147,483,647, so since Beyond Max Cash a
- * unit priced over max cash (or a spend past it) makes the WHOLE packet invalid. Recorded by the golden
- * fixtures max-cash-unit-price-over-int32 and max-cash-spent-overflow. Raising it is the maintainer's call and must
- * happen in JS first.
+ * <p>GP AMOUNTS ARE NOT INT32 (12 Nov 2026, the maintainer's call, JS first as store.mjs GP_MAX): price and spent
+ * are whole numbers up to 2^53-1. Until then both were refused above 2,147,483,647, so since Beyond Max Cash one offer
+ * worth more than max cash made the WHOLE packet invalid and all eight slots went unrecorded while it stood. Quantities
+ * (total, filled) keep the int32 cap, the game's own. Golden fixtures max-cash-unit-price-over-int32 and
+ * max-cash-spent-overflow record the accepted packets.
  */
 public final class Packet {
   public final int version;
@@ -109,9 +109,9 @@ public final class Packet {
       JsonObject o = e.getAsJsonObject();
       if (!Js.integer(o.get("slot"), 0, 7) || slots.contains(slot(o)) || !Js.isString(o.get("state"))
           || !STATES.contains(o.get("state").getAsString()) || !id(o.get("offerId"))
-          || !Js.integer(o.get("itemId")) || !Js.integer(o.get("price")) || !Js.integer(o.get("total"))
+          || !Js.integer(o.get("itemId")) || !Js.integer(o.get("price"), 0, Js.MAX_SAFE) || !Js.integer(o.get("total"))
           || !Js.integer(o.get("filled")) || Js.number(o.get("filled")) > Js.number(o.get("total"))
-          || !Js.integer(o.get("spent")) || !Js.isBoolean(o.get("knownStart")) || !Js.isString(o.get("name"))
+          || !Js.integer(o.get("spent"), 0, Js.MAX_SAFE) || !Js.isBoolean(o.get("knownStart")) || !Js.isString(o.get("name"))
           || o.get("name").getAsString().length() > 150) throw new JournalException("Invalid offer");
       String state = o.get("state").getAsString();
       if (!"EMPTY".equals(state) && (Js.number(o.get("itemId")) == 0 || Js.number(o.get("total")) == 0 || Js.number(o.get("price")) == 0))

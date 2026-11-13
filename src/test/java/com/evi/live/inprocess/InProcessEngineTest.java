@@ -94,7 +94,7 @@ public final class InProcessEngineTest {
       "downloaded but not rebuilt: never more than the basis");
     check(InProcessEngine.backfillLine(market(basis, window, 0, false, basis)) == null, "no line once buys are released");
     String gaveUp = InProcessEngine.backfillLine(market(300, window, 37, false, 300));
-    check(gaveUp != null && gaveUp.startsWith("Price history: 300 of " + basis + " hours.") && gaveUp.contains("next starts")
+    check(gaveUp != null && gaveUp.startsWith("Price history: 300 of " + basis + " hours.") && gaveUp.contains("in about half an hour")
       && gaveUp.endsWith("Buy suggestions start once it is complete."), "hours the Wiki would not send: said so, with the retry: " + gaveUp);
     for (String l : new String[]{InProcessEngine.backfillLine(market(140, window, 0, true, 120)), gaveUp})
       for (char c : l.toCharArray()) check(c >= 32 && c < 127, "ASCII only: " + l);

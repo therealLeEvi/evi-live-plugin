@@ -118,6 +118,7 @@ anywhere.
 | `journal/` | Your trade journal: the Grand Exchange offers you place (item, price, quantity, how much filled), one file per account. Accounts are told apart by a scrambled name, never your account name. |
 | `prices/` | The price history from the Wiki: about 10 MB for the two weeks EVI keeps, older hours deleted as new ones arrive, plus the cached item list. With two RuneLite clients open, the history is shared between them. |
 | `suggestions/` | The suggestions EVI showed you and which ones you marked *Took it*, so it can check whether following them made GP. |
+| `activity/` | A detailed local record, one file per account per month: each suggestion EVI showed and the prices it was looking at, what you did with it (skipped, blocked, took it, or filled it with the hotkey), each change to your offers, your cash stack at the time, and when you were logged in. It exists so EVI's suggestions can be measured and improved. Like everything here it stays on your computer and is never sent. Older months are compressed, nothing is deleted; you can delete the folder at any time and EVI works the same. |
 | `identity-salt.txt` | The random value that scrambles account names. Keep it if you move the folder, or old journal files no longer match your accounts. |
 | `import/` | Only if you use the one-time import below. |
 | `share/` | Only if you press *Save my trade log...*: the trade log you chose to save (see below). |

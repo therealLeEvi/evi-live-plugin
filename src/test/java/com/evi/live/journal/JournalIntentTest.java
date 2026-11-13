@@ -335,15 +335,13 @@ public final class JournalIntentTest {
     } catch (JournalException e) {
       check(e.getMessage().startsWith("That purchase is too large to record"), e.getMessage());
     }
-    // A packet unit price above 2^31-1 is refused, exactly as the bridge does today (an open decision for the maintainer).
+    // A packet unit price above 2^31-1 is ACCEPTED since 12 Nov 2026 (store.mjs GP_MAX; the maintainer's call): a GP
+    // amount is a whole number up to 2^53-1. Before, one such offer made the whole packet invalid.
     Client c = new Client("acct-a", "s-a1");
     c.place(0, 20997, "Twisted bow", 2_147_483_648L, 1, false);
-    try {
-      s.ingest(c.packet(T0 - 300), T0);
-      throw new AssertionError("a unit price past 2^31-1 is refused today, like the bridge");
-    } catch (JournalException e) {
-      check("Invalid offer".equals(e.getMessage()), e.getMessage());
-    }
+    s.ingest(c.packet(T0 - 300), T0);
+    check(s.state(T0).active.stream().anyMatch(o -> o.itemId == 20997 && o.price == 2_147_483_648L),
+      "a unit price past 2^31-1 is recorded as it is, not refused and not wrapped");
   }
 
   // A JS object with integer keys iterates them ASCENDING whatever the insertion order; the bridge's

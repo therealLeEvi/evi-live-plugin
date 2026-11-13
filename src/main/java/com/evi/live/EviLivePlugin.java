@@ -139,14 +139,20 @@ public class EviLivePlugin extends Plugin {
   /** The status line before the engine's first answer (the name is from the build that still had a bridge mode). */
   static final String IN_PROCESS_WAITING="Waiting for prices from the OSRS Wiki.";
   /** The suggestion card while buys wait for the price history and nothing else applies. ASCII. */
-  static final String BUYS_PAUSED="Buy suggestions are paused while EVI loads price history (progress below).";
+  static final String BUYS_PAUSED="Buy suggestions are paused while EVI loads price history.";
   static final String BUYS_PAUSED_STALE="Buy suggestions are paused: the latest prices are too old to quote from (see below).";
   /** How long a helper thread (never the client thread) waits for the sender after shutDown before logging that it is still busy. */
   static final long SENDER_STOP_WAIT_MS=10_000;
-  private String salt,profile,account,session,economy;
+  private String salt,profile,session,economy;
+  // volatile: written on the client thread (login, reset), read by the poll thread and the sidebar's buttons.
+  private volatile String account;
   private long seq;
   private int warmTicks,ticks;
   private boolean ready;
+  private boolean loginFailureLogged;
+  // 12 Nov 2026: the LOCAL activity log file (com.evi.live.activity.ActivityLog). Never sent anywhere, never read by the engine.
+  private volatile com.evi.live.activity.ActivityLog activityLog;
+  private final ActivityEvents tel=new ActivityEvents(System::currentTimeMillis);
   private final Offer[] slots=new Offer[8];
   // Item IDs the suggestion poll should skip over: never a permanent preference (that's the
   // config blocklist) -- both cleared on reset() and meant to last only this login session.
@@ -470,6 +476,7 @@ public class EviLivePlugin extends Plugin {
       // The sidebar's import line follows the journal, which is the one place that looks for the file (on its own
       // thread; the panel only ever hears a sentence or null).
       j.onImportNotice(this::showImportNotice);
+      j.onHealthNotice(m->{EviLivePanel p=panel;if(p!=null)p.journalNotice(m);});
       // The import takes the old companion app's machine-wide "Yours, not stock" marks with each account's import.
       j.importItemMarks(()->true);
       // ...and its flip histories from another tracker, kept by character name: told at login, before the first packet.
@@ -504,6 +511,11 @@ public class EviLivePlugin extends Plugin {
         text->gson.fromJson(text,JsonElement.class),m->log.info(m),
         ()->(client!=null&&client.isClientThread())||SwingUtilities.isEventDispatchThread(),()->inProcessProfitSince,null,this::blockedFor,records);
       suggestionRecords=records;
+      try {
+        com.evi.live.activity.ActivityLog t=new com.evi.live.activity.ActivityLog(dir,System::currentTimeMillis,m->log.info(m));
+        activityLog=t;tel.start(t);
+        if(suggestionCache!=null)suggestionCache.onAssist(tel::assist);
+      } catch(RuntimeException ex){log.warn("EVI activity log: not started (EVI itself is unaffected)",ex);}
       inProcess=engine;
       answers=new InProcessTransport(engine,System::currentTimeMillis);
     } catch(Exception ex){log.warn("EVI engine: not started",ex);}
@@ -544,6 +556,8 @@ public class EviLivePlugin extends Plugin {
     inProcess=null;
     answers=null;
     suggestionRecords=null;
+    tel.sessionEnd("shutdown");tel.stop();
+    com.evi.live.activity.ActivityLog t=activityLog;activityLog=null;if(t!=null)t.shutdown();
     if(engine!=null)engine.shutdown();
   }
   /** The profit reset, from the config (null: never reset, or nothing stored, or no ConfigManager in a test). */
@@ -623,7 +637,64 @@ public class EviLivePlugin extends Plugin {
     } catch(Throwable ignored){ inInstance=false; }
   }
 
-  private void reset(){promotedItemId=-1;ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;}
+  private void reset(){tel.sessionEnd("reset");promotedItemId=-1;ready=false;warmTicks=0;ticks=0;profile=null;account=null;economy=null;session=UUID.randomUUID().toString();seq=0;Arrays.fill(slots,null);activeSlotItemIds=Collections.emptySet();activeOffers=Collections.emptyList();geOfferRows=Collections.emptyList();if(panel!=null)panel.offers(geOfferRows);skippedItemIds.clear();unverifiableItemIds.clear();freeSlots=-1;collectableSlots=-1;bridgePositionItems=Collections.emptySet();cashStack=-1;openOfferItemId=-1;membersWorld=null;heldForResale.clear();inventoryItemIds=Collections.emptySet();inventorySnapshotEstablished=false;inventoryQuantities=Collections.emptyMap();inInstance=false;forgetSuggestion();updatePanelSuggestion(null,null);}
+  // 12 Nov 2026: what the price hint, the hotkey and the search row fill from. It used to survive a logout, a world hop,
+  // an account switch and every FAILED poll, so the sidebar could say "Suggestion check failed" (or show another
+  // character's state) while the hotkey still filled the old price and quantity. A suggestion nobody can vouch for any
+  // more must not be fillable. Null-safe: test rigs build a plugin without the injected caches.
+  private void forgetSuggestion(){
+    tel.empty("unavailable");
+    if(suggestionCache!=null){suggestionCache.set(null);suggestionCache.setExtras(null);}
+    if(openItemPriceCache!=null)openItemPriceCache.set(null);
+  }
+  // ---- activity log helpers: each builds a small JSON object from what the plugin already holds; none may throw ----
+  private int activityTick(){try{return client==null?-1:client.getTickCount();}catch(RuntimeException ex){return -1;}}
+  private com.google.gson.JsonObject activitySettings(){
+    try {
+      com.google.gson.JsonObject o=new com.google.gson.JsonObject();
+      o.addProperty("pace",String.valueOf(config.tradePace()));
+      o.addProperty("minProfit",String.valueOf(config.minProfitThreshold()));
+      o.addProperty("source",String.valueOf(config.suggestionSource()));
+      o.addProperty("sizing",String.valueOf(config.positionSizing()));
+      o.addProperty("cashShare",String.valueOf(config.maxTradeShare()));
+      o.addProperty("focus",String.valueOf(config.suggestionFocus()));
+      o.addProperty("positions",String.valueOf(config.maxPositions()));
+      o.addProperty("forecast",String.valueOf(config.exitRiskCheck()));
+      return o;
+    } catch(RuntimeException ex){return null;}
+  }
+  /** The market as EVI reads it for one item right now, from the price layer's in-memory snapshot (no disk, no network). */
+  private com.google.gson.JsonObject activityMarket(int itemId){
+    try {
+      PriceDataService p=prices;
+      if(p==null||itemId<=0)return null;
+      com.evi.live.market.MarketSnapshot m=p.snapshot();
+      if(m==null)return null;
+      com.google.gson.JsonObject o=new com.google.gson.JsonObject();
+      com.evi.live.market.LatestPrices.Quote q=m.latest==null?null:m.latest.get(itemId);
+      if(q!=null){o.addProperty("low",q.low);o.addProperty("lowTime",q.lowTime);o.addProperty("high",q.high);o.addProperty("highTime",q.highTime);o.addProperty("latestAt",m.latestFetchedAtMs);}
+      com.evi.live.market.HourBucket h=m.latestHour(System.currentTimeMillis());
+      int k=h==null?-1:h.indexOf(itemId);
+      if(k>=0){o.addProperty("hourHighVol",h.highVolume(k));o.addProperty("hourLowVol",h.lowVolume(k));}
+      if(m.robust!=null&&m.robust.get(itemId)!=null){o.addProperty("steadyLow",m.robust.get(itemId).low);o.addProperty("steadyHigh",m.robust.get(itemId).high);}
+      if(m.typical!=null&&m.typical.get(itemId)!=null)o.addProperty("typicalVol",m.typical.get(itemId));
+      if(m.stretch!=null&&m.stretch.get(itemId)!=null)o.addProperty("level",m.stretch.get(itemId).level);
+      o.addProperty("hoursStored",m.hoursStored);
+      return o;
+    } catch(RuntimeException ex){return null;}
+  }
+  private void activityPoll(Suggestion s,List<Suggestion> extras){
+    try {
+      if(s==null){tel.empty(freeSlots==0?"slots-full":"none");return;}
+      tel.settings(activitySettings());
+      com.google.gson.JsonObject j=null;
+      try{if(gson!=null){j=gson.toJsonTree(s).getAsJsonObject();j.remove("reasoning");}}catch(RuntimeException ex){j=null;}
+      tel.shown(s,extras,j,activityMarket(s.itemId),cashStack,-1);
+    } catch(RuntimeException ex){ /* activity log never costs a poll */ }
+  }
+  // The margin-above-noise check was never given to the built-in engine, so the stored switch is ignored outright:
+  // never sent, and never named as the reason for an empty answer.
+  private boolean cushionOn(){return false;}
   // Tracks heldForResale from a single slot's old -> new transition. Two independent things can
   // happen here, and either, both, or neither may apply on a given tick:
   //  1. A buy-side offer (BUYING/BOUGHT/CANCELLED_BUY) that had at least one unit filled just
@@ -643,7 +714,7 @@ public class EviLivePlugin extends Plugin {
       // can legitimately be 0 or unset on data observed before this field existed; that's sent as
       // price 0, which computeHoldingSuggestion (bridge side) already treats as "unknown, fall back
       // to the plain reminder" -- never a fabricated/guessed cost basis.
-      int avgPrice=old.spent>0?(int)Math.round(old.spent/(double)old.filled):0;
+      long avgPrice=old.spent>0?Math.round(old.spent/(double)old.filled):0L; // long: a unit can cost more than 2^31-1 since Beyond Max Cash
       heldForResale.put(old.itemId,new Held(old.itemId,old.filled,old.name,old.offerId,avgPrice));
     }
     if(!"EMPTY".equals(n.state) && !buy(n.state)) {
@@ -880,7 +951,10 @@ public class EviLivePlugin extends Plugin {
     if(p!=null)p.loggedIn(e.getGameState()==GameState.LOGGED_IN);
     if(e.getGameState()==GameState.LOGIN_SCREEN || e.getGameState()==GameState.HOPPING || e.getGameState()==GameState.CONNECTION_LOST) {
       if(ready)enqueue(false);
+      tel.sessionEnd(String.valueOf(e.getGameState()));
       reset();
+      // Only the login screen: a hop or a dropped connection is over in seconds, and saying "logged out" then would be wrong.
+      if(e.getGameState()==GameState.LOGIN_SCREEN)updatePanelEmpty(new EviLivePanel.State(STATE_LOGGED_OUT,false,LOGGED_OUT_BODY));
     }
   }
   @Subscribe public void onGameTick(GameTick e) {
@@ -912,8 +986,14 @@ public class EviLivePlugin extends Plugin {
         for(int i=0;i<8;i++)slots[i]=capture(i,offers[i],null,false);
         refreshActiveSlotItemIds();
         ready=true;enqueue(true);
-      } catch(Exception ex){reset();}
-    } else if(++ticks%15==0){tellCharacterName();enqueue(true);}
+        tel.session(account,session,"login",WikiPriceClient.VERSION,membersWorld,activitySettings());
+        for(int i=0;i<8;i++)tel.offer(null,slots[i],false,null,activityTick()); // what was standing at login: its real moments are not known, and it says so
+      } catch(Exception ex){
+        // Said once per client start: this used to be silent, and a login that never became ready looked like "EVI has nothing to say".
+        if(!loginFailureLogged){loginFailureLogged=true;log.warn("EVI Live: could not read the Grand Exchange at login; trying again every tick",ex);}
+        reset();
+      }
+    } else if(++ticks%15==0){tellCharacterName();enqueue(true);if(ticks%500==0)tel.alive();} // 500 ticks = 5 minutes
   }
   /** The account's character name to the journal (its import takes the flips kept under that name), once it is known.
    *  Client thread (the local player is read here); the journal only stores it. Told again until it is known. */
@@ -938,6 +1018,7 @@ public class EviLivePlugin extends Plugin {
     int i=e.getSlot();if(i<0||i>=8||e.getOffer()==null)return;
     Offer old=slots[i];
     slots[i]=capture(i,e.getOffer(),old,true);
+    tel.offer(old,slots[i],true,activityMarket(slots[i].itemId),activityTick());
     updateHeldForResale(old,slots[i]);
     refreshActiveSlotItemIds();
     enqueue(true);
@@ -1006,17 +1087,21 @@ public class EviLivePlugin extends Plugin {
   private void pollSuggestion(long generation) {
     if(!running || generation!=lifecycle)return;
     try {
+      final String polledAccount=account; // the account this poll asks about
       final String query=suggestionQuery();
       final AnswerSource own=answers;
-      if(own==null){updatePanelSuggestion(null,"EVI's built-in engine did not start. Details are in the client log.");return;}
+      if(own==null){forgetSuggestion();updatePanelEmpty(unavailableState("EVI's built-in engine did not start. Details are in the client log."));return;}
       importBridgePreferences();refreshBlockedSection();
       String json=own.get(query);
       if(!running || generation!=lifecycle)return;
+      // The answer belongs to the account the QUERY named. A logout, hop or character switch while it was being
+      // worked out makes it another moment's answer: drop it, the next poll (2 s) asks again for whoever is here now.
+      if(!java.util.Objects.equals(polledAccount,account))return;
       InProcessEngine.Answer answer=own.lastAnswer();
       // Still working on this query and nothing to reuse: leave the sidebar exactly as it is (never blank it).
       if(json==null && own.lastGetStatus()==InProcessTransport.PENDING)return;
       showInProcessStatus(answer);
-      if(json==null){updatePanelSuggestion(null,answer==null?null:answer.unavailable);return;}
+      if(json==null){forgetSuggestion();updatePanelEmpty(unavailableState(answer==null?null:answer.unavailable));return;}
       SuggestionResponse r=gson.fromJson(json,SuggestionResponse.class);
       Suggestion s=r==null?null:r.suggestion;
       // Remember which positions the bridge believes are held, so the next poll can confirm them
@@ -1043,6 +1128,7 @@ public class EviLivePlugin extends Plugin {
       s=applyPromotion(s,extras);
       suggestionCache.setExtras(extras);
       suggestionCache.set(s);
+      activityPoll(s,extras);
       openItemPriceCache.set(r==null?null:r.openItemPrice);
       // A buy held back to keep room for the sells already owed is a different answer from nothing
       // being eligible, and saying "nothing passes your settings" there would be plainly wrong.
@@ -1052,9 +1138,11 @@ public class EviLivePlugin extends Plugin {
         ?(used.pricesStale?BUYS_PAUSED_STALE:BUYS_PAUSED)
         :r!=null&&r.slots!=null&&r.slots.buysHeldForExits
         ?sellReserveMessage(r.slots.sellSlotsOwed)
-        :noSuggestionMessage(sourceIncludesMarket(),config.marginSafetyCushion(),freeSlots,collectableSlots,config.suggestionSource())
+        :noSuggestionMessage(sourceIncludesMarket(),cushionOn(),freeSlots,collectableSlots,config.suggestionSource())
           +reachableMessage(r==null?null:r.reachable,setAsideCount());
-      updatePanelSuggestion(s,s==null?diagnosis:null);
+      if(s==null)updatePanelEmpty(emptyState(used==null||used.buysReady,used!=null&&used.pricesStale,used==null?null:used.backfillLine,
+        r!=null&&r.slots!=null&&r.slots.buysHeldForExits,freeSlots,collectableSlots,diagnosis));
+      else updatePanelSuggestion(s,null);
       // The session list is what shapes everything above it; kept on screen so it is never the
       // invisible reason a suggestion looks poor.
       if(panel!=null)panel.skipped(setAsideCount());
@@ -1073,7 +1161,8 @@ public class EviLivePlugin extends Plugin {
       // and showing a short message keeps any future unanticipated failure visible and recoverable
       // instead of silently killing suggestions forever.
       log.warn("EVI Live: suggestion check failed",ex);
-      updatePanelSuggestion(null,"Suggestion check failed ("+ex.getClass().getSimpleName()+"). See client.log for details.");
+      forgetSuggestion();
+      updatePanelEmpty(new EviLivePanel.State(STATE_COULD_NOT_CHECK,true,"Suggestion check failed ("+ex.getClass().getSimpleName()+"). See client.log for details."));
     }
   }
   // Called only from the sidebar's "Skip this suggestion" button (Swing EDT). Excludes the
@@ -1132,12 +1221,14 @@ public class EviLivePlugin extends Plugin {
   // Called only from a click on an "Also worth buying" card (Swing EDT). Re-polls at once so the swap is immediate.
   private void promoteSuggestion(int itemId) {
     promotedItemId=itemId;
+    tel.action("promote-extra",itemId);
     if(running && sender!=null)sender.execute(()->pollSuggestion(lifecycle));
   }
 
   private void skipSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
+    tel.action("skip",s);tel.gone("skipped");
     // Four hours on this account, surviving hops, relogs and restarts (see SkipMemory). With no
     // account known yet there is nowhere per-account to keep it, so it lasts the session instead --
     // the press must still apply to the item it was pressed on.
@@ -1163,6 +1254,7 @@ public class EviLivePlugin extends Plugin {
   private void blockSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
+    tel.action("block",s);tel.gone("blocked");
     final int itemId=s.itemId;
     String name=s.name==null||s.name.isEmpty()?"this item":s.name;
     skippedItemIds.add(itemId);
@@ -1232,6 +1324,7 @@ public class EviLivePlugin extends Plugin {
   private void acceptSuggestion() {
     Suggestion s=suggestionCache.get();
     if(s==null||s.id==null||s.id.isEmpty())return;
+    tel.action(s.accepted?"took-it-undone":"took-it",s);
     final boolean nowAccepted=!s.accepted;
     s.accepted=nowAccepted;
     // Remembered LOCALLY until the engine's answer echoes the same for this id. Without it the press
@@ -1266,6 +1359,7 @@ public class EviLivePlugin extends Plugin {
   private void flagPersonalUse() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
+    tel.action("mine",s);
     if(!"sell".equals(s.action)) {
       if(panel!=null)panel.suggestion("Personal use only applies to a \"you're holding this\" suggestion.");
       return;
@@ -1328,6 +1422,7 @@ public class EviLivePlugin extends Plugin {
   private void flagNotHeld() {
     Suggestion s=suggestionCache.get();
     if(s==null)return;
+    tel.action("gone",s);
     if(!"sell".equals(s.action) || s.buyId==null || s.buyId.isEmpty()) {
       if(panel!=null)panel.suggestion("\"I don't have this anymore\" only applies to a \"you're holding this\" suggestion EVI can trace back to one specific buy.");
       return;
@@ -1362,7 +1457,7 @@ public class EviLivePlugin extends Plugin {
     // predicted margin doesn't clear that specific item's own recent price volatility. See
     // marginClearsCushion in bridge/suggestions.mjs for exactly what this does and doesn't check.
     // Left off entirely when disabled, same treatment as every other setting here.
-    if(config.marginSafetyCushion()){if(q.length()>0)q.append('&');q.append("cushion=1");}
+    if(cushionOn()){if(q.length()>0)q.append('&');q.append("cushion=1");}
     String blocklist=sanitizeBlocklist(config.itemBlocklist());
     if(!blocklist.isEmpty()){if(q.length()>0)q.append('&');q.append("blocklist=").append(blocklist);}
     // riskLevelV2, NEVER the retired riskLevel: a High stored under the old key (which only ever tuned
@@ -1676,8 +1771,73 @@ public class EviLivePlugin extends Plugin {
     return left+String.format(" Of the rest, the best this cash stack can do right now is %s. Lower the minimum to see"
       +" trades like it.",worth);
   }
+  // ---- Board D (12 Nov 2026, the maintainer's choice): WHICH kind of "no suggestion" this is, as a short label over the sentence.
+  // The sentences themselves are the ones above, unchanged; the label only names the case, so a full Grand Exchange, a
+  // minimum nothing reaches and a failed check no longer look alike. Labels are ASCII and state facts, never advice.
+  static final String STATE_LOADING="LOADING PRICE HISTORY";
+  static final String STATE_INCOMPLETE="PRICE HISTORY INCOMPLETE";
+  static final String STATE_PAUSED="BUY SUGGESTIONS PAUSED";
+  static final String STATE_STALE="PRICES OUT OF DATE";
+  static final String STATE_HOLDING_OFF="HOLDING OFF ON A NEW BUY";
+  static final String STATE_SLOTS="ALL SLOTS IN USE";
+  static final String STATE_NOTHING="NOTHING PASSES RIGHT NOW";
+  static final String STATE_WAITING="WAITING FOR PRICES";
+  static final String STATE_COULD_NOT_CHECK="COULD NOT CHECK";
+  static final String STATE_LOGGED_OUT="LOGGED OUT";
+  static final String LOGGED_OUT_BODY="Log in to see suggestions. EVI reads your Grand Exchange offers again when you do.";
+  /** Said under the bar while price history loads: holdings and advice speak from the first minute; only buys wait. */
+  static final String STILL_WATCHED=" Offers you have placed are still watched.";
+  private static final java.util.regex.Pattern BACKFILL=java.util.regex.Pattern.compile("^(Loading price history|Price history): (\\d+) of (\\d+) hours\\. (.+)$");
+
+  /** The state for a poll that came back with no suggestion. {@code diagnosis} is the sentence the card always showed for
+   *  it; the order of the cases is the order that sentence was chosen in (buys not asked at all, then the slot reserve, then
+   *  a full Grand Exchange, then nothing passing). While history loads the count comes from the engine's own line, so the
+   *  card and that line can never disagree; a line that does not parse falls back to the plain paused sentence. Pure. */
+  static EviLivePanel.State emptyState(boolean buysReady, boolean pricesStale, String backfillLine, boolean heldForExits,
+                                       int freeSlots, int collectableSlots, String diagnosis) {
+    if(!buysReady) {
+      if(pricesStale)return new EviLivePanel.State(STATE_STALE,true,diagnosis);
+      java.util.regex.Matcher m=backfillLine==null?null:BACKFILL.matcher(backfillLine);
+      if(m==null||!m.matches())return new EviLivePanel.State(STATE_PAUSED,false,diagnosis);
+      int done,total;
+      try{done=Integer.parseInt(m.group(2));total=Integer.parseInt(m.group(3));}
+      catch(NumberFormatException e){return new EviLivePanel.State(STATE_PAUSED,false,diagnosis);}
+      if(total<=0)return new EviLivePanel.State(STATE_PAUSED,false,diagnosis);
+      boolean loading=m.group(1).startsWith("Loading");
+      return new EviLivePanel.State(loading?STATE_LOADING:STATE_INCOMPLETE,false,m.group(4)+(loading?STILL_WATCHED:""),
+        m.group(2)+" of "+m.group(3)+" hours",done,total);
+    }
+    if(heldForExits) {
+      // the label already says "holding off on a new buy", so the sentence starts at its reason
+      String lead="Holding off on a new buy: ";
+      String body=diagnosis!=null&&diagnosis.startsWith(lead)&&diagnosis.length()>lead.length()
+        ?Character.toUpperCase(diagnosis.charAt(lead.length()))+diagnosis.substring(lead.length()+1):diagnosis;
+      return new EviLivePanel.State(STATE_HOLDING_OFF,false,body);
+    }
+    if(freeSlots==0&&collectableSlots==0)return new EviLivePanel.State(STATE_SLOTS,false,diagnosis);
+    return new EviLivePanel.State(STATE_NOTHING,false,diagnosis);
+  }
+
+  /** The state for a poll the engine could not answer: waiting for the Wiki's first data is not a fault and is not drawn as
+   *  one; anything else is. No message at all is the plain placeholder. Pure. */
+  static EviLivePanel.State unavailableState(String message) {
+    if(message==null||message.isEmpty())return new EviLivePanel.State(null,false,message);
+    boolean waiting=message.startsWith("Loading ")||message.startsWith("Waiting ");
+    return new EviLivePanel.State(waiting?STATE_WAITING:STATE_COULD_NOT_CHECK,!waiting,message);
+  }
+
+  /** updatePanelSuggestion(null, ...) for a typed state: nothing stays fillable, and the row shows only what applies. */
+  private void updatePanelEmpty(EviLivePanel.State st) {
+    tel.gone("cleared");
+    if(suggestionCache!=null){suggestionCache.set(null);suggestionCache.setExtras(null);}
+    if(panel==null)return;
+    panel.emptyState(st);panel.suggestionWarning(false);panel.actions(false,false,false,false,false);
+  }
   private void updatePanelSuggestion(Suggestion s, String diag) {
-    if(s==null)suggestionCache.setExtras(null); // no main pick, no extras: a stale extra must never fill a quantity
+    // No main pick: nothing stays fillable. Not the extras (a stale extra must never fill a quantity) and, since 12 Nov
+    // 2026, not the main pick either -- every caller that passes null is saying "there is no suggestion now".
+    if(s==null)tel.gone("cleared");
+    if(s==null && suggestionCache!=null){suggestionCache.set(null);suggestionCache.setExtras(null);}
     if(panel==null)return;
     if(s==null){panel.suggestion(diag);panel.suggestionWarning(false);panel.actions(false,false,false,false,false);return;}
     // The accept button only appears when the bridge issued an id for this suggestion. An older

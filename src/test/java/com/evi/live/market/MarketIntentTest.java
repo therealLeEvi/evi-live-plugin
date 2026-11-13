@@ -52,6 +52,7 @@ public final class MarketIntentTest {
     wikiClient();
     scheduler();
     backoffAndOddAnswers();
+    setAsideHourIsRetried();
     restartRepairsOnlyTheGap();
     diskFailureBacksOff();
     backoffPerKind();
@@ -490,6 +491,33 @@ public final class MarketIntentTest {
     }
   }
 
+  /** 12 Nov 2026: an hour set aside after three failures is asked for again after SKIP_RETRY_MS, not only after a restart. */
+  static void setAsideHourIsRetried() throws Exception {
+    Filepath root = MarketTestSupport.tempRoot("evi-prices-retry");
+    List<String> log = new CopyOnWriteArrayList<>();
+    try {
+      AtomicLong clock = new AtomicLong(T0);
+      long newest = PriceDataService.newestClosedHour(T0);
+      Function<String, Answer> ok = wikiAnswers();
+      boolean[] down = {true};
+      FakeWiki fake = new FakeWiki(url -> down[0] && tsOf(url) == newest ? Answer.fail("connection reset") : ok.apply(url));
+      PriceDataService s = service(root, fake, clock, log, 6);
+      java.util.function.LongSupplier asked = () -> fake.urls().stream().filter(u -> tsOf(u) == newest).count();
+      // The outage: the newest hour fails three times and is set aside; the hours behind it are fetched meanwhile.
+      for (int k = 0; k < 40 && asked.getAsLong() < 3; k++) { clock.addAndGet(60_000); s.step(); }
+      check(asked.getAsLong() == 3 && log.stream().anyMatch(m -> m.contains("set aside")), "three failures set the hour aside: " + log);
+      down[0] = false; // the network is back
+      for (int k = 0; k < 20; k++) { clock.addAndGet(60_000); s.step(); }
+      check(asked.getAsLong() == 3, "inside the 30 minutes the set-aside hour is not asked for again (asked " + asked.getAsLong() + ")");
+      clock.addAndGet(PriceDataService.SKIP_RETRY_MS);
+      for (int k = 0; k < 20 && asked.getAsLong() < 4; k++) { clock.addAndGet(60_000); s.step(); }
+      check(asked.getAsLong() == 4, "after 30 minutes the set-aside hour is asked for again without a restart (asked " + asked.getAsLong() + ")");
+      check(s.archive().done(newest), "and, the network being back, it is stored");
+    } finally {
+      MarketTestSupport.deleteTree(root);
+    }
+  }
+
   static void backoffAndOddAnswers() throws Exception {
     Filepath root = MarketTestSupport.tempRoot("evi-prices-backoff");
     List<String> log = new CopyOnWriteArrayList<>();
@@ -507,7 +535,7 @@ public final class MarketIntentTest {
       });
       PriceDataService s = service(root, fake, clock, log, 12);
       check(s.step() == PriceDataService.Work.MAPPING, "mapping first");
-      // Back-off after failures: 10 s, then 20 s, then the hour is left for the next session (and 40 s before the next request).
+      // Back-off after failures: 10 s, then 20 s, then the hour is set aside for 30 minutes (and 40 s before the next request).
       long[] waits = {2500, 10_000, 20_000};
       for (int k = 0; k < 3; k++) {
         clock.addAndGet(waits[k] - 1);
@@ -520,7 +548,7 @@ public final class MarketIntentTest {
       clock.addAndGet(1);
       s.step();
       check(tsOf(fake.urls().get(fake.seen.size() - 1)) == newest - H, "after three failures the hour is skipped and the next older one asked");
-      check(log.stream().anyMatch(m -> m.contains("failed 3 times") && m.contains("left for the next session")), "the skip is logged: " + log);
+      check(log.stream().anyMatch(m -> m.contains("failed 3 times") && m.contains("set aside, asked for again in 30 minutes")), "the skip is logged: " + log);
       // An empty answer is remembered on disk and never asked again; an answer for a different hour is stored as that hour.
       Filepath dir = s.archive().dir();
       check(dir.joinSegment(HourlyArchive.noneName(newest - H)).exists(), "an empty answer leaves its marker");
@@ -532,15 +560,16 @@ public final class MarketIntentTest {
       clock.addAndGet(2500);
       s.step(); // 503
       check(tsOf(fake.urls().get(fake.seen.size() - 1)) == newest - 3 * H && log.stream().anyMatch(m -> m.contains("HTTP 503")), "a 503 is a failure");
-      // Run the rest out: the hour stored as a different answer (newest-9h) is never asked for itself.
-      for (int i = 0; i < 40; i++) {
+      // Run the rest out: the hour stored as a different answer (newest-9h) is never asked for itself. 25 minutes, so
+      // inside SKIP_RETRY_MS: a set-aside hour is retried after 30 (setAsideHourIsRetried).
+      for (int i = 0; i < 25; i++) {
         clock.addAndGet(60_000);
         s.step();
       }
       List<Long> asked = fake.urls().stream().map(MarketIntentTest::tsOf).filter(t -> t > 0).collect(Collectors.toList());
       check(!asked.contains(newest - 9 * H), "an hour already stored from another answer was asked for again");
       check(asked.stream().filter(t -> t == newest - H).count() == 1, "the empty hour was asked for again");
-      check(asked.stream().filter(t -> t == newest).count() == 3, "the skipped hour was asked for again in the same session");
+      check(asked.stream().filter(t -> t == newest).count() == 3, "the skipped hour was asked for again inside its 30 minutes");
       s.shutdown();
       // A new session (the next login) asks for the skipped hour again, and still not for the empty one.
       AtomicLong clock2 = new AtomicLong(clock.get());
@@ -633,7 +662,7 @@ public final class MarketIntentTest {
         check(tsOf(fake.urls().get(fake.seen.size() - 1)) == newest, "attempt " + (k + 1) + " re-asks the hour that could not be saved");
       }
       check(fake.seen.size() == 4, "one request per back-off period, not one every 2.5 s: " + fake.seen.size());
-      check(log.stream().anyMatch(m -> m.contains("could not be saved") && m.contains("left for the next session")), "the given-up save is logged: " + log);
+      check(log.stream().anyMatch(m -> m.contains("could not be saved") && m.contains("set aside, asked for again in 30 minutes")), "the given-up save is logged: " + log);
       ArchiveFiles.moveSeam = null;
       clock.addAndGet(40_000);
       s.step();

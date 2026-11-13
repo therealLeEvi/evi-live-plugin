@@ -168,17 +168,18 @@ public final class EviLiveSidebarLinesTest {
     // The card, with a verdict.
     panel.suggestion(pick("buy", 698, 2000, 2100, true), "prose");
     edt();
-    JLabel total = label(card, "Total 1,396,000 gp");
-    check(total != null, "the BUY card must state \"Total 1,396,000 gp\": " + labels(card));
+    JLabel total = label(card, "x 698 \u00b7 Total cost 1,396,000 gp");
+    check(total != null, "the BUY card must state its quantity and \"Total cost 1,396,000 gp\" on one line: " + labels(card));
     check(total.getForeground().equals(p.muted), "the total is a plain figure in the muted text colour, not a verdict colour: " + total.getForeground());
     // A sell card: no total at all.
     panel.suggestion(pick("sell", 698, 2000, 2100, true), "prose");
     edt();
-    check(labels(card).stream().noneMatch(t -> t != null && t.startsWith("Total")), "a SELL card must carry no total: " + labels(card));
+    check(labels(card).stream().noneMatch(t -> t != null && t.contains("Total")), "a SELL card must carry no total: " + labels(card));
+    check(label(card, "x 698") != null && label(card, "2,000 \u2192 2,100 gp each") != null, "a SELL card states its quantity and both prices with units: " + labels(card));
     // A buy whose quantity is unknown: the card is drawn, without a total.
     panel.suggestion(pick("buy", 0, 2000, 2100, true), "prose");
     edt();
-    check(labels(card).stream().noneMatch(t -> t != null && t.startsWith("Total")), "a buy with no quantity must carry no total: " + labels(card));
+    check(labels(card).stream().noneMatch(t -> t != null && (t.contains("Total") || t.startsWith("x "))), "a buy with no quantity must carry no size line: " + labels(card));
     // The paragraph (no verdict from the bridge): the total on its own last line, for a buy only.
     JTextArea prose = (JTextArea) get(panel, "suggestion");
     panel.suggestion(pick("buy", 698, 2000, 2100, false), "Test item x698");

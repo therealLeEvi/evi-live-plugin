@@ -183,6 +183,12 @@ public final class PluginJournal {
   private final Map<String, String[]> identities = new java.util.concurrent.ConcurrentHashMap<>();
   /** Told the import line to show (the text) or hide (null), on the journal thread, only when it changes. */
   private volatile Consumer<String> importNotice;
+  /** Told when a character's journal cannot take new trades, or soon will not (12 Nov 2026). See {@link #healthText}. */
+  private volatile Consumer<String> healthNotice;
+  private boolean healthSent;
+  private String healthShown;
+  /** From this share of {@link JournalFile#MAX_BYTES} on, the sidebar says how full the record is. */
+  static final double NEARLY_FULL = 0.8;
 
   // ---- owned by the journal thread
   private Store store;
@@ -825,6 +831,49 @@ public final class PluginJournal {
     // an Error such as OutOfMemoryError on a huge file -- the packet is journalled next. An Error is not
     // retried this session (the same file would most likely do it again); switching the setting on resets it.
     lastAccount = p.account;
+    try {
+      journalPacket(p, el, now);
+    } finally {
+      tellHealth(p.account);
+    }
+  }
+
+  /**
+   * What the sidebar says about one character's journal, or null when there is nothing to say. Until 12 Nov 2026 both
+   * failures were silent: a file with an unreadable line, and a file past 100 MB, each refuse every new packet, and only
+   * the client log said so -- EVI went on suggesting while recording nothing. ASCII; states facts, promises nothing.
+   */
+  static String healthText(boolean unreadable, long sizeBytes) {
+    if (unreadable)
+      return "EVI cannot read part of this character's trade record, so new trades are not being recorded. The file is left"
+        + " untouched in EVI's data folder; details are in the client log.";
+    if (sizeBytes > JournalFile.MAX_BYTES)
+      return "This character's trade record is full (100 MB), so new trades are not being recorded. Please check for an EVI update.";
+    if (sizeBytes >= (long) (JournalFile.MAX_BYTES * NEARLY_FULL))
+      return "This character's trade record is " + Math.min(99, sizeBytes * 100 / JournalFile.MAX_BYTES)
+        + "% full. Nothing is lost yet; please check for an EVI update before it fills.";
+    return null;
+  }
+
+  /** Sets the listener for {@link #healthText}; told once per change, from the journal thread. */
+  public void onHealthNotice(Consumer<String> listener) {
+    healthNotice = listener;
+  }
+
+  private void tellHealth(String account) {
+    try {
+      String text = healthText(broken.contains(account), consumed.getOrDefault(account, 0L));
+      if (healthSent && java.util.Objects.equals(text, healthShown)) return;
+      healthSent = true;
+      healthShown = text;
+      Consumer<String> l = healthNotice;
+      if (l != null) l.accept(text);
+    } catch (RuntimeException e) { // a notice must never cost a packet
+      log.accept("EVI journal: could not report the journal's state: " + e);
+    }
+  }
+
+  private void journalPacket(Packet p, JsonElement el, long now) {
     try {
       maybeImport(p.account);
     } catch (Throwable e) {

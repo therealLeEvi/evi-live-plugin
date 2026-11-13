@@ -61,17 +61,18 @@ class SuggestionKeybindHandler {
     // never fills a value the player wasn't also shown first.
     Suggestion s = geOffer.resolveOpenSuggestion(suggestionCache.get(), suggestionCache.extras(), openItemPriceCache.get());
     switch (geOffer.openFieldFor(s)) {
-      case QUANTITY: fillValue(s.quantity); break;
-      case BUY_PRICE: fillValue(s.buyPrice); break;
-      case SELL_PRICE: fillValue(s.sellPrice); break;
+      case QUANTITY: if (fillValue(s.quantity)) suggestionCache.assisted(s, "quantity", s.quantity); break;
+      case BUY_PRICE: if (fillValue(s.buyPrice)) suggestionCache.assisted(s, "price", s.buyPrice); break;
+      case SELL_PRICE: if (fillValue(s.sellPrice)) suggestionCache.assisted(s, "price", s.sellPrice); break;
       default: break;
     }
   }
 
-  private void fillValue(long value) {
+  private boolean fillValue(long value) {
     Widget input = client.getWidget(GeIds.CHATBOX_FULL_INPUT);
-    if (input == null) return;
+    if (input == null) return false;
     input.setText(value + "*");
     client.setVarcStrValue(GeIds.CHATBOX_INPUT_TEXT, String.valueOf(value));
+    return true;
   }
 }

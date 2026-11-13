@@ -16,5 +16,10 @@ class SuggestionCache {
   Suggestion get() { return current; }
   void set(Suggestion s) { current = s; }
   List<Suggestion> extras() { return extras; }
+  /** Told when the hotkey filled a field from a suggestion (activity log only; never changes what is filled). */
+  interface Assist { void filled(Suggestion s, String field, long value); }
+  private volatile Assist assist;
+  void onAssist(Assist a) { assist = a; }
+  void assisted(Suggestion s, String field, long value) { Assist a = assist; if (a != null) { try { a.filled(s, field, value); } catch (RuntimeException ignored) { } } }
   void setExtras(List<Suggestion> list) { extras = list == null ? Collections.emptyList() : Collections.unmodifiableList(new java.util.ArrayList<>(list)); }
 }

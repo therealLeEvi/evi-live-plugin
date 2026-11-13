@@ -60,7 +60,7 @@ public final class EviLivePanelTest {
       blockButton.doClick();
       if(blocks.get()!=1)throw new AssertionError("Block callback must fire exactly once per click");
       // The profit line and its Reset: asked for so the sidebar shows what EVI has actually realised.
-      JButton resetButton=buttons.stream().filter(b->"Reset profit count".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a profit Reset button"));
+      JButton resetButton=buttons.stream().filter(b->"Reset".equals(b.getText())).findFirst().orElseThrow(()->new AssertionError("The sidebar needs a profit Reset button"));
       resetButton.doClick();
       if(resets.get()!=1)throw new AssertionError("Reset callback must fire exactly once per click");
 
@@ -105,6 +105,16 @@ public final class EviLivePanelTest {
     profitPanel.profit(p);
     SwingUtilities.invokeAndWait(()->{});
     String line=profitText(profitPanel);
+    // Board C (12 Nov 2026): the strip is ONE short line on screen; what the figure covers and leaves out is the tooltip of
+    // the line and of the figure, word for word what the line used to say.
+    {
+      List<Component> strip=new ArrayList<>();visit(profitPanel,strip);
+      List<String> areas=strip.stream().filter(c->c instanceof JTextArea).map(c->((JTextArea)c).getText()).collect(java.util.stream.Collectors.toList());
+      if(!areas.contains(EviLivePanel.PROFIT_LINE))throw new AssertionError("the strip's one line: "+areas);
+      if(areas.stream().anyMatch(t->t.contains("Not counted")||t.contains("everything EVI has matched")))throw new AssertionError("the detail is one hover away, not on the strip: "+areas);
+      if(EviLivePanel.PROFIT_LINE.length()>30||EviLivePanel.PROFIT_LINE.contains("\n"))throw new AssertionError("the strip stays one line on a 225px panel");
+      if(!line.equals(EviLivePanel.plainTip(profitFigure(profitPanel).getToolTipText())))throw new AssertionError("the figure carries the same tooltip as its line");
+    }
     javax.swing.JLabel figure=profitFigure(profitPanel);
     if(figure==null||!("+"+String.format("%,d",1234567)+" gp").equals(figure.getText()))
       throw new AssertionError("The realised figure belongs in its own label: "+(figure==null?"absent":figure.getText()));
@@ -172,7 +182,7 @@ public final class EviLivePanelTest {
       if(all.contains("fallback prose"))throw new AssertionError("A verdict must replace the paragraph, not sit beside it");
       if(!all.contains("Bandos chestplate"))throw new AssertionError("The card must name the item");
       if(!all.contains("+"+String.format("%,d",580000L)))throw new AssertionError("The card must lead with what the trade is worth");
-      if(!all.contains("BUY "+String.format("%,d",1)))throw new AssertionError("The card must say what it is asking for");
+      if(!all.contains("\nBUY\n")||!all.contains("Buy 20,000,000 \u2192 sell 21,000,000 gp each")||!all.contains("x 1 \u00b7 Total cost 20,000,000 gp"))throw new AssertionError("The card must say what it is asking for, with units: "+all);
       if(!all.contains("EVERY CHECK PASSED"))throw new AssertionError("The verdict label must show");
       if(!all.contains("Buyers paying more than quoted"))throw new AssertionError("Each check line must show");
     });
@@ -404,6 +414,96 @@ public final class EviLivePanelTest {
         &&((javax.swing.JComponent)c).getToolTipText().startsWith("<html>")))throw new AssertionError("Block's tooltip, wrapped");
       cp.actions(false,true,false,false,false);
       SwingUtilities.invokeAndWait(()->{});
+      // Board D (12 Nov 2026, the maintainer's choice): a typed no-suggestion state -- a label, the sentence, and a count with a bar
+      // only while history loads -- and the plugin's choice of state for each kind of "nothing".
+      {
+        javax.swing.JPanel stateCard=(javax.swing.JPanel)field(cp,"suggestionCard");
+        JTextArea body=(JTextArea)field(cp,"suggestion");
+        String histLine="Loading price history: 300 of 336 hours. Buy suggestions start when it's done.";
+        cp.backfillNotice(histLine);
+        EviLivePanel.State loading=EviLivePlugin.emptyState(false,false,histLine,false,3,0,EviLivePlugin.BUYS_PAUSED);
+        if(!EviLivePlugin.STATE_LOADING.equals(loading.label)||loading.warn||loading.done!=300||loading.total!=336||!"300 of 336 hours".equals(loading.progress)
+          ||!("Buy suggestions start when it's done."+EviLivePlugin.STILL_WATCHED).equals(loading.body))throw new AssertionError("the loading state reads the engine's own line: "+loading.label+" / "+loading.progress+" / "+loading.body);
+        cp.emptyState(loading);cp.suggestionWarning(false);
+        SwingUtilities.invokeAndWait(()->{});
+        List<Component> drawn=new ArrayList<>();visit(stateCard,drawn);
+        javax.swing.JLabel head=(javax.swing.JLabel)drawn.stream().filter(c->c instanceof javax.swing.JLabel&&((javax.swing.JLabel)c).getClientProperty(EviLivePanel.STATE_LABEL)!=null).findFirst().orElseThrow(()->new AssertionError("a state needs its label"));
+        if(!EviLivePlugin.STATE_LOADING.equals(head.getText())||!EviTheme.palette().muted.equals(head.getForeground()))throw new AssertionError("a neutral state's label is muted, never a warning colour: "+head.getText()+" "+head.getForeground());
+        javax.swing.JComponent bar=(javax.swing.JComponent)drawn.stream().filter(c->c instanceof javax.swing.JComponent&&((javax.swing.JComponent)c).getClientProperty(EviLivePanel.STATE_BAR)!=null).findFirst().orElseThrow(()->new AssertionError("loading draws a bar"));
+        if(Math.abs((Double)bar.getClientProperty(EviLivePanel.STATE_BAR)-300/336.0)>1e-9)throw new AssertionError("the bar is the count's share: "+bar.getClientProperty(EviLivePanel.STATE_BAR));
+        if(drawn.stream().noneMatch(c->c instanceof javax.swing.JLabel&&"300 of 336 hours".equals(((javax.swing.JLabel)c).getText()))||!loading.body.equals(body.getText())||!drawn.contains(body))
+          throw new AssertionError("the count and the sentence are in the card");
+        if(cp.backfillNote.isVisible()||!histLine.equals(cp.backfillNote.getText()))throw new AssertionError("while the card carries the progress the bottom line is kept but not drawn");
+        if(!(stateCard.getBorder() instanceof javax.swing.border.CompoundBorder)||!EviTheme.palette().rule.equals(((javax.swing.border.MatteBorder)((javax.swing.border.CompoundBorder)stateCard.getBorder()).getOutsideBorder()).getMatteColor()))
+          throw new AssertionError("a neutral state keeps its plain stripe after the loss-warning repaint");
+        // something wrong is drawn as wrong: the warn colour on the label and the stripe, and no bar
+        EviLivePanel.State failedState=EviLivePlugin.unavailableState("EVI could not work out a suggestion just now. Details are in the client log.");
+        cp.emptyState(failedState);cp.suggestionWarning(false);
+        SwingUtilities.invokeAndWait(()->{});
+        List<Component> wrong=new ArrayList<>();visit(stateCard,wrong);
+        javax.swing.JLabel wrongHead=(javax.swing.JLabel)wrong.stream().filter(c->c instanceof javax.swing.JLabel&&((javax.swing.JLabel)c).getClientProperty(EviLivePanel.STATE_LABEL)!=null).findFirst().orElseThrow();
+        if(!EviLivePlugin.STATE_COULD_NOT_CHECK.equals(wrongHead.getText())||!failedState.warn||!EviTheme.palette().warn.equals(wrongHead.getForeground())
+          ||!EviTheme.palette().warn.equals(((javax.swing.border.MatteBorder)((javax.swing.border.CompoundBorder)stateCard.getBorder()).getOutsideBorder()).getMatteColor()))throw new AssertionError("a failed check wears the warn colour");
+        if(wrong.stream().anyMatch(c->c instanceof javax.swing.JComponent&&((javax.swing.JComponent)c).getClientProperty(EviLivePanel.STATE_BAR)!=null))throw new AssertionError("only loading draws a bar");
+        if(!cp.backfillNote.isVisible())throw new AssertionError("with no progress in the card, the bottom line is drawn again");
+        // back to a plain paragraph: no label left behind, and the usual stripe
+        cp.suggestion("Skipped for 4 hours. Checking for the next suggestion...");cp.suggestionWarning(false);
+        SwingUtilities.invokeAndWait(()->{});
+        List<Component> plainNow=new ArrayList<>();visit(stateCard,plainNow);
+        if(plainNow.stream().anyMatch(c->c instanceof javax.swing.JComponent&&((javax.swing.JComponent)c).getClientProperty(EviLivePanel.STATE_LABEL)!=null)||!"Skipped for 4 hours. Checking for the next suggestion...".equals(body.getText())
+          ||!EviTheme.palette().accent.equals(((javax.swing.border.MatteBorder)((javax.swing.border.CompoundBorder)stateCard.getBorder()).getOutsideBorder()).getMatteColor()))throw new AssertionError("a plain message clears the state");
+        cp.backfillNotice(null);
+        // which state, for each kind of nothing (the sentence is the one the card always showed)
+        String full=EviLivePlugin.noSuggestionMessage(true,false,0,0,null),none=EviLivePlugin.noSuggestionMessage(true,false,3,0,null);
+        EviLivePanel.State slots=EviLivePlugin.emptyState(true,false,null,false,0,0,full),nothing=EviLivePlugin.emptyState(true,false,null,false,3,0,none);
+        if(!EviLivePlugin.STATE_SLOTS.equals(slots.label)||!full.equals(slots.body)||slots.warn||slots.hasProgress())throw new AssertionError("a full Grand Exchange is its own state");
+        if(!EviLivePlugin.STATE_NOTHING.equals(nothing.label)||!none.equals(nothing.body)||nothing.warn)throw new AssertionError("nothing passing is its own state, with its sentence unchanged");
+        if(EviLivePlugin.STATE_SLOTS.matches(".*\\d.*"))throw new AssertionError("the slots label names no count: free-to-play has three slots, not eight");
+        EviLivePanel.State reserve=EviLivePlugin.emptyState(true,false,null,true,2,0,EviLivePlugin.sellReserveMessage(3));
+        if(!EviLivePlugin.STATE_HOLDING_OFF.equals(reserve.label)||!reserve.body.startsWith("Your remaining Grand Exchange slots are being kept for selling 3 items")||reserve.body.contains("Holding off"))
+          throw new AssertionError("the reserve state does not repeat its label: "+reserve.body);
+        EviLivePanel.State stale=EviLivePlugin.emptyState(false,true,histLine,false,3,0,EviLivePlugin.BUYS_PAUSED_STALE);
+        if(!EviLivePlugin.STATE_STALE.equals(stale.label)||!stale.warn||stale.hasProgress())throw new AssertionError("prices too old is a warning state, with no bar");
+        EviLivePanel.State retry=EviLivePlugin.emptyState(false,false,"Price history: 200 of 336 hours. The OSRS Wiki did not send the rest this time; EVI asks again in about half an hour. Buy suggestions start once it is complete.",false,3,0,EviLivePlugin.BUYS_PAUSED);
+        if(!EviLivePlugin.STATE_INCOMPLETE.equals(retry.label)||retry.done!=200||!retry.body.startsWith("The OSRS Wiki did not send the rest")||retry.body.contains("still watched"))throw new AssertionError("an incomplete history says why: "+retry.label+" / "+retry.body);
+        EviLivePanel.State odd=EviLivePlugin.emptyState(false,false,"something else entirely",false,3,0,EviLivePlugin.BUYS_PAUSED);
+        if(!EviLivePlugin.STATE_PAUSED.equals(odd.label)||odd.hasProgress()||!EviLivePlugin.BUYS_PAUSED.equals(odd.body))throw new AssertionError("a line that does not parse draws no invented count");
+        EviLivePanel.State wait=EviLivePlugin.unavailableState("Waiting for the latest prices from the OSRS Wiki. They load while you are logged in.");
+        if(!EviLivePlugin.STATE_WAITING.equals(wait.label)||wait.warn)throw new AssertionError("waiting for the first prices is not a fault");
+        if(EviLivePlugin.unavailableState(null).label!=null)throw new AssertionError("no message at all is the plain placeholder");
+        for(String l:new String[]{EviLivePlugin.STATE_LOADING,EviLivePlugin.STATE_INCOMPLETE,EviLivePlugin.STATE_PAUSED,EviLivePlugin.STATE_STALE,EviLivePlugin.STATE_HOLDING_OFF,EviLivePlugin.STATE_SLOTS,
+          EviLivePlugin.STATE_NOTHING,EviLivePlugin.STATE_WAITING,EviLivePlugin.STATE_COULD_NOT_CHECK,EviLivePlugin.STATE_LOGGED_OUT})
+          if(l.length()>26||!l.equals(l.toUpperCase(java.util.Locale.ROOT))||!l.chars().allMatch(ch->ch<128))throw new AssertionError("a label is short, capitals, ASCII: "+l);
+      }
+      // Board C (12 Nov 2026, the maintainer's choice): an action that cannot apply is HIDDEN, and the ones left share the row
+      // equally, in their usual order, with no hole where a hidden one was.
+      {
+        List<Component> rowNow=new ArrayList<>();visit(cp,rowNow);
+        java.util.function.Function<String,JButton> btn=name->rowNow.stream().filter(x->x instanceof JButton&&name.equals(((JButton)x).getText())).map(x->(JButton)x).findFirst()
+          .orElseThrow(()->new AssertionError("no \""+name+"\" button"));
+        JButton took=btn.apply("Taken"),mine=btn.apply("Mine"),gone=btn.apply("Gone"),skip=btn.apply("Skip"),block=btn.apply("Block");
+        java.awt.Container actionRow=skip.getParent();
+        if(actionRow.isVisible()||mine.isVisible()||gone.isVisible()||block.isVisible())
+          throw new AssertionError("with no suggestion on screen the action row is not drawn at all");
+        cp.actions(true,false,false,false,true);
+        SwingUtilities.invokeAndWait(()->{actionRow.setSize(205,40);actionRow.doLayout();});
+        if(mine.isVisible()||gone.isVisible()||!block.isVisible()||!took.isVisible()||!skip.isVisible())
+          throw new AssertionError("a buy shows Took it, Skip and Block, and nothing else");
+        if(!actionRow.isVisible())throw new AssertionError("the row is drawn again as soon as there is a suggestion");
+        if(!"Took it".equals(took.getText())||!took.isEnabled()||!block.isEnabled())throw new AssertionError("the buy's three are live");
+        if(took.getX()!=0||skip.getX()!=took.getX()+took.getWidth()+5||block.getX()!=skip.getX()+skip.getWidth()+5||block.getX()+block.getWidth()!=205)
+          throw new AssertionError("three across, edge to edge, no hole for a hidden action: "+took.getBounds()+skip.getBounds()+block.getBounds());
+        if(Math.abs(took.getWidth()-skip.getWidth())>1||Math.abs(skip.getWidth()-block.getWidth())>1||took.getHeight()!=skip.getHeight()||skip.getHeight()!=block.getHeight())
+          throw new AssertionError("the three are the same size: none stands out");
+        cp.actions(true,false,true,false,false);
+        SwingUtilities.invokeAndWait(()->{actionRow.setSize(205,40);actionRow.doLayout();});
+        if(!mine.isVisible()||!gone.isVisible()||block.isVisible())throw new AssertionError("something held shows Took it, Mine, Gone and Skip");
+        if(gone.isEnabled()||!mine.isEnabled())throw new AssertionError("Gone stays in view but dimmed when EVI cannot trace the purchase (its tooltip points to Mine)");
+        if(took.getX()!=0||mine.getX()<=took.getX()||gone.getX()<=mine.getX()||skip.getX()<=gone.getX()||skip.getX()+skip.getWidth()!=205)
+          throw new AssertionError("four across in the usual order: "+took.getBounds()+mine.getBounds()+gone.getBounds()+skip.getBounds());
+        cp.actions(false,true,false,false,false);
+        SwingUtilities.invokeAndWait(()->{});
+      }
       List<Component> every=new ArrayList<>();visit(cp,every);
       int tips=0;
       for(Component c:every)if(c instanceof javax.swing.JComponent) {
@@ -458,9 +558,18 @@ public final class EviLivePanelTest {
 
     System.out.println("PASS: the trade-log invitation (last in the sidebar, hidden until shown, its words, two ordinary buttons side by side, each calling its action, the muted line); a split crash note shows its short line on the card and its detail as a width-wrapped tooltip, and every sidebar tooltip is short or wrapped; holding lines open Personal use / I don't have this anymore (in order, drawn alike, nothing preselected) for their own lot, with a tooltip saying so, and no other line does; the session set-aside count and its undo button; the profit line (the figure in its own label, coloured green up and red down, trades, what it leaves out, a reset count, an unreadable answer, and reset feedback), the five-icon action row (each caption, its callback, and the row replacing the old button stack), the colour-scheme switch repainting in place (including rows rebuilt afterwards), no pairing field or button and no bridge-era wording, the title and the first status and profit lines, the skip-suggestion and block button callbacks, the personal-use and not-held button callbacks, the Active offers list (one row per occupied slot including uncollected/cancelled ones, status text, and clearing), the scroll fix (no sidebar text area moves its caret, unchanged text is never rewritten), the suggestion card (item, worth, verdict label and check lines; a failed check marked as well as coloured; and the paragraph coming back when the engine sends no verdict), and the status dot tracking the Wiki prices");
   }
+  /** A private field of the panel, for the checks that need the card itself. */
+  private static Object field(Object target,String name) {
+    try{java.lang.reflect.Field f=target.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(target);}
+    catch(ReflectiveOperationException e){throw new AssertionError(e);}
+  }
   /** The profit line's current text: the one text area that starts with a figure or its own status. */
   private static String profitText(Container panel) {
     List<Component> all=new ArrayList<>();visit(panel,all);
+    // board C (12 Nov 2026): what the figure covers is the tooltip of the strip's one line; a status is still its text
+    String covered=all.stream().filter(c->c instanceof javax.swing.JTextArea&&EviLivePanel.PROFIT_LINE.equals(((javax.swing.JTextArea)c).getText()))
+      .map(c->EviLivePanel.plainTip(((javax.swing.JTextArea)c).getToolTipText())).findFirst().orElse(null);
+    if(covered!=null)return covered;
     return all.stream().filter(c->c instanceof javax.swing.JTextArea).map(c->((javax.swing.JTextArea)c).getText())
       .filter(t->t.startsWith("(")||t.startsWith("Profit unavailable")||t.startsWith("Counting from now")||t.startsWith("Waiting for your trade record"))
       .findFirst().orElse("");

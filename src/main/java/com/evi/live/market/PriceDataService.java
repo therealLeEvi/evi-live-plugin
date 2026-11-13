@@ -35,7 +35,7 @@ import net.runelite.client.util.Filepath;
  * A failed request is retried with back-off (10 s doubling to 5 min), never in a loop. The back-off is kept PER KIND of
  * request (item list, latest prices, hours): a success of one kind never resets another kind's back-off, and a kind
  * that is backing off never holds up the others (an item list the Wiki will not give does not stop the history). An
- * hour that fails {@value #HOUR_TRIES} times running is left for the next session rather than blocking the ones behind
+ * hour that fails {@value #HOUR_TRIES} times running is set aside for 30 minutes rather than blocking the ones behind
  * it. Whatever the kind, two requests are always at least {@code gapMs} apart. Nothing waits by sleeping (the Hub
  * forbids {@code Thread.sleep}): every wait is a scheduled task.
  *
@@ -72,6 +72,13 @@ public final class PriceDataService {
   static final long BACKOFF_FIRST_MS = 10_000;
   static final long BACKOFF_MAX_MS = 5L * 60 * 1000;
   static final int HOUR_TRIES = 3;
+  /**
+   * How long an hour given up after {@value #HOUR_TRIES} failures stays set aside before it is asked for again (12 Nov
+   * 2026). It used to stay set aside until RuneLite restarted, which charged a short network outage to whichever hours
+   * happened to be missing: two such hours and buy suggestions waited for a restart. Setting it aside still keeps one bad
+   * hour from blocking the hours behind it; it just is not forever.
+   */
+  static final long SKIP_RETRY_MS = 30L * 60 * 1000;
   /** How often a new generation looks whether the previous one has finished. */
   static final long HANDOVER_POLL_MS = 250;
   /** The shortest wait between two scheduler ticks, so no condition can ever turn into a busy loop. */
@@ -130,6 +137,8 @@ public final class PriceDataService {
   private final Set<Long> known = new HashSet<>();
   private final Set<Long> skipped = new HashSet<>();
   private final Map<Long, Integer> hourFailures = new HashMap<>();
+  /** When each set-aside hour was set aside (monotonic clock), for {@link #SKIP_RETRY_MS}. */
+  private final Map<Long, Long> skippedAt = new HashMap<>();
   private ItemCatalog catalog;
   private long catalogDay = Long.MIN_VALUE;
   private LatestPrices latest;
@@ -492,6 +501,7 @@ public final class PriceDataService {
 
   /** The newest hour of the window not yet stored or answered (nextMissingFor), or null. Another client's file counts as stored. */
   Long nextMissingHour(long now) {
+    reviveSkipped();
     long newest = newestClosedHour(now);
     long oldest = newest - (long) settings.retentionHours * HOUR;
     for (long ts = newest; ts >= oldest; ts -= HOUR) {
@@ -588,13 +598,27 @@ public final class PriceDataService {
     hourFailures.remove(ts);
   }
 
-  /** A failed hour: back off, and after {@value #HOUR_TRIES} failures in a row leave it for the next session. */
+  /** Hours set aside {@link #SKIP_RETRY_MS} ago are ordinary missing hours again, with their failure count cleared. */
+  private void reviveSkipped() {
+    if (skippedAt.isEmpty()) return;
+    long t = mono.getAsLong();
+    for (java.util.Iterator<Map.Entry<Long, Long>> it = skippedAt.entrySet().iterator(); it.hasNext();) {
+      Map.Entry<Long, Long> e = it.next();
+      if (t - e.getValue() < SKIP_RETRY_MS) continue;
+      skipped.remove(e.getKey());
+      hourFailures.remove(e.getKey());
+      it.remove();
+    }
+  }
+
+  /** A failed hour: back off, and after {@value #HOUR_TRIES} failures in a row set it aside for {@link #SKIP_RETRY_MS}. */
   private void hourFailed(long ts, String what, Exception e) {
     requested(K_HOUR, false);
     int n = hourFailures.merge(ts, 1, Integer::sum);
     if (n >= HOUR_TRIES) {
       skipped.add(ts);
-      log.accept("EVI prices: hour " + ts + " failed " + n + " times (" + what + ": " + e.getMessage() + "); left for the next session");
+      skippedAt.put(ts, mono.getAsLong());
+      log.accept("EVI prices: hour " + ts + " failed " + n + " times (" + what + ": " + e.getMessage() + "); set aside, asked for again in 30 minutes");
     } else {
       log.accept("EVI prices: hour " + ts + " " + what + " (" + e.getMessage() + ")");
     }
@@ -627,6 +651,7 @@ public final class PriceDataService {
     archive.prune(oldestKept, now);
     known.removeIf(ts -> ts < oldestKept);
     skipped.removeIf(ts -> ts < oldestKept);
+    skippedAt.keySet().removeIf(ts -> ts < oldestKept);
   }
 
   /**

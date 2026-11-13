@@ -780,6 +780,8 @@ public final class PluginJournalTest {
     check(expect.equals(offers(replay(replaced))) && !expect.equals(offers(replay(ref.subList(0, 3)))),
       "a file replaced by different, longer content was read on from the middle instead of re-read whole");
     // 3. A line that does not decode, appended by another writer: A's file is left out and logged; B's packets are kept.
+    List<String> health = new java.util.concurrent.CopyOnWriteArrayList<>();
+    j.onHealthNotice(m -> health.add(String.valueOf(m)));
     JournalFile.appendText(f, "{not json\n");
     Client b = streamB();
     List<String> lb = new ArrayList<>();
@@ -789,6 +791,20 @@ public final class PluginJournalTest {
     check(fileLines(root, B).equals(lb) && lb.size() == 2, "a packet for B was dropped because A's file gained an unreadable line");
     check(logsContaining(from, JournalFile.fileName(A) + " has an unreadable line") == 1, "the unreadable line was not logged once: " + logs.subList(from, logs.size()));
     check(j.call(PluginJournalTest::offers).equals(offers(replay(lb))), "A's unreadable file must be left out and B's packets kept");
+    // 12 Nov 2026: the sidebar is TOLD. B's journal is healthy (nothing to say); the next packet for A, whose
+    // file cannot be read and so takes no new trade, says so instead of leaving it to the client log.
+    check(health.isEmpty(), "a healthy journal has nothing new to say (it was healthy before the listener came): " + health);
+    feed(a, 3, 4, j, clock, null);
+    check(j.awaitIdle(30000), "drain");
+    check(health.size() == 1 && health.get(0).startsWith("EVI cannot read part of this character's trade record, so new trades are not being recorded"),
+      "an unreadable journal must reach the sidebar, once: " + health);
+    long cap = JournalFile.MAX_BYTES;
+    check(PluginJournal.healthText(false, 0) == null && PluginJournal.healthText(false, cap * 79 / 100) == null, "under 80% full: nothing to say");
+    check("This character's trade record is 80% full. Nothing is lost yet; please check for an EVI update before it fills.".equals(PluginJournal.healthText(false, cap * 80 / 100)),
+      "from 80% the share is stated: " + PluginJournal.healthText(false, cap * 80 / 100));
+    check(PluginJournal.healthText(false, cap).contains("99% full"), "exactly at the cap an append still succeeds, so it is not called full: " + PluginJournal.healthText(false, cap));
+    check(PluginJournal.healthText(false, cap + 1).startsWith("This character's trade record is full (100 MB), so new trades are not being recorded"), "past the cap: full");
+    check(PluginJournal.healthText(true, 5).startsWith("EVI cannot read part"), "unreadable wins over size");
     stop(j);
     root.deleteRecursively();
   }
